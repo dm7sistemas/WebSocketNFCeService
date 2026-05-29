@@ -1,0 +1,48 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{C15ED9BD-5C58-40C1-9B96-53BF525CB6ED}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebSocketNFCeService.Domain", "src\WebSocketNFCeService.Domain\WebSocketNFCeService.Domain.csproj", "{DAC0B9C2-AADD-415F-84F1-2D7BDBE24FA0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebSocketNFCeService.Infra", "src\WebSocketNFCeService.Infra\WebSocketNFCeService.Infra.csproj", "{BD7482AE-0EC4-4FD4-B644-64F097F53509}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebSocketNFCeService.NFe", "src\WebSocketNFCeService.NFe\WebSocketNFCeService.NFe.csproj", "{D398A7B9-57C5-4D93-AAE2-584B0D94A91B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebSocketNFCeService", "src\WebSocketNFCeService\WebSocketNFCeService.csproj", "{DB94F40C-0338-4521-8042-42E62B9650F3}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DAC0B9C2-AADD-415F-84F1-2D7BDBE24FA0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DAC0B9C2-AADD-415F-84F1-2D7BDBE24FA0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DAC0B9C2-AADD-415F-84F1-2D7BDBE24FA0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DAC0B9C2-AADD-415F-84F1-2D7BDBE24FA0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BD7482AE-0EC4-4FD4-B644-64F097F53509}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BD7482AE-0EC4-4FD4-B644-64F097F53509}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BD7482AE-0EC4-4FD4-B644-64F097F53509}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BD7482AE-0EC4-4FD4-B644-64F097F53509}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D398A7B9-57C5-4D93-AAE2-584B0D94A91B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D398A7B9-57C5-4D93-AAE2-584B0D94A91B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D398A7B9-57C5-4D93-AAE2-584B0D94A91B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D398A7B9-57C5-4D93-AAE2-584B0D94A91B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DB94F40C-0338-4521-8042-42E62B9650F3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DB94F40C-0338-4521-8042-42E62B9650F3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DB94F40C-0338-4521-8042-42E62B9650F3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DB94F40C-0338-4521-8042-42E62B9650F3}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{DAC0B9C2-AADD-415F-84F1-2D7BDBE24FA0} = {C15ED9BD-5C58-40C1-9B96-53BF525CB6ED}
+		{BD7482AE-0EC4-4FD4-B644-64F097F53509} = {C15ED9BD-5C58-40C1-9B96-53BF525CB6ED}
+		{D398A7B9-57C5-4D93-AAE2-584B0D94A91B} = {C15ED9BD-5C58-40C1-9B96-53BF525CB6ED}
+		{DB94F40C-0338-4521-8042-42E62B9650F3} = {C15ED9BD-5C58-40C1-9B96-53BF525CB6ED}
+	EndGlobalSection
+EndGlobal

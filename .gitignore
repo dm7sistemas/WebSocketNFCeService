@@ -1,0 +1,12 @@
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.log
+.vs/
+Pdfs/
+Xmls/
+appsettings.json
+appsettings.Development.json
+launchSettings.json
