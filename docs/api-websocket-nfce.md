@@ -244,6 +244,7 @@ Quando CPF e CNPJ estiverem vazios, a NFCe é emitida para "CONSUMIDOR NÃO IDEN
 | `consumidorFinal` | int | não | 1 | 1=Sim, 0=Não |
 | `presencaComprador` | int | não | 1 | 1=Presencial, 2=Internet, 3=Telefone, 4=Delivery, 5=Presencial fora, 9=Outros |
 | `valorGorjeta` | decimal | não | 0 | Gorjeta (injetada automaticamente como produto 99999) |
+| `valorDesconto` | decimal | não | 0 | **Desconto global/cupom** (distribuído proporcionalmente aos itens) |
 | `parcelas` | array | não | `null` | **Array de pagamentos** (recomendado). Se presente, `tipoPagamento`/`valorPagamento`/`formaPagamento` são ignorados |
 | `cnpjCredenciadora` | string | não | `null` | CNPJ da credenciadora (fallback para parcelas) |
 | `codigoAutorizacao` | string | não | `null` | Código de autorização (fallback) |
@@ -318,22 +319,49 @@ Calculado automaticamente: `vTroco = totalPago - vNF` (se `totalPago > vNF`, sen
 
 ---
 
-## Desconto item a item
+## Desconto e Cupom de Desconto
 
-- Campo `valorDesconto` em cada produto
-- Base de ICMS, PIS e COFINS: `valorTotal - valorDesconto`
-- `vNF` total: `sum(valorTotal) - sum(valorDesconto) + sum(frete+seguro+outras)`
+O sistema suporta duas formas de desconto que podem ser utilizadas em conjunto:
 
-Exemplo:
+### 1. Desconto item a item
+- Campo `valorDesconto` em cada produto.
+- Aplicado diretamente sobre o respectivo item.
+
+### 2. Desconto global (Cupom de Desconto)
+- Campo `valorDesconto` no objeto `nfe`.
+- Para atender às regras da SEFAZ, este desconto global é **distribuído proporcionalmente** entre todos os produtos da nota (com base no `valorTotal` de cada item). O resto da divisão por arredondamento é somado ao último item para garantir a exatidão.
+
+### Cálculo final por item e na Nota
+- O desconto total de cada item no XML final será a soma do seu desconto individual (`valorDesconto` do produto) + sua parcela proporcional do desconto global.
+- Base de ICMS, PIS e COFINS de cada item: `valorTotal - (descontoItem + descontoGlobalProporcional)`.
+- Totais da NF-e:
+  - `vProd` (Total bruto): `sum(valorTotal)`
+  - `vDesc` (Total de descontos): `sum(descontoItem) + descontoGlobal`
+  - `vNF` (Total líquido): `vProd - vDesc + sum(frete + seguro + outras)`
+
+Exemplo com ambos os descontos:
 ```json
 {
   "produtos": [
-    { "codigo": "001", "quantidade": 2, "valorUnitario": 4.00, "valorTotal": 8.00, "valorDesconto": 1.00 },
-    { "codigo": "002", "quantidade": 1, "valorUnitario": 7.00, "valorTotal": 7.00, "valorDesconto": 0.50 }
-  ]
+    { "codigo": "001", "quantidade": 2, "valorUnitario": 5.00, "valorTotal": 10.00, "valorDesconto": 1.00 },
+    { "codigo": "002", "quantidade": 1, "valorUnitario": 10.00, "valorTotal": 10.00, "valorDesconto": 2.00 }
+  ],
+  "nfe": {
+    "numero": 12,
+    "serie": 1,
+    "valorDesconto": 3.00
+  }
 }
 ```
-→ NF-e: `vProd=15,00`, `vDesc=1,50`, `vNF=13,50`
+* **Distribuição do desconto global (3.00)**:
+  * Como ambos os produtos têm o mesmo `valorTotal` (10.00), cada um recebe 1.50 de desconto global.
+* **Resultado final nos itens**:
+  * Item 1: `vDesc` final = `1.00` (individual) + `1.50` (global) = `2.50`. Base de cálculo = `10.00 - 2.50 = 7.50`.
+  * Item 2: `vDesc` final = `2.00` (individual) + `1.50` (global) = `3.50`. Base de cálculo = `10.00 - 3.50 = 6.50`.
+* **Resultado nos totais da nota**:
+  * `vProd = 20.00`
+  * `vDesc = 6.00`
+  * `vNF = 14.00`
 
 ---
 

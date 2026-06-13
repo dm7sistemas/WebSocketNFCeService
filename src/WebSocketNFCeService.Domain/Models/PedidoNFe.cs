@@ -58,6 +58,9 @@ public class DadosNFe
     [JsonPropertyName("valorGorjeta")]
     public decimal ValorGorjeta { get; set; }
 
+    [JsonPropertyName("valorDesconto")]
+    public decimal ValorDesconto { get; set; }
+
     [JsonPropertyName("parcelas")]
     public List<Parcela>? Parcelas { get; set; }
 

@@ -29,6 +29,9 @@ public static class PedidoToNFeMapper
         var emitente = pedido.Emitente!;
         var destinatario = pedido.Destinatario;
 
+        var globalDiscount = pedido.NFe?.ValorDesconto ?? 0m;
+        var distributedDiscounts = CalcularDescontosDistribuidos(pedido.Produtos, globalDiscount);
+
         nfe.infNFe = new infNFe
         {
             versao = "4.00",
@@ -37,12 +40,12 @@ public static class PedidoToNFeMapper
             dest = destinatario is not null &&
                     (!string.IsNullOrWhiteSpace(destinatario.Cpf) ||
                      !string.IsNullOrWhiteSpace(destinatario.Cnpj))
-                ? MapearDestinatario(destinatario) : null,
+                 ? MapearDestinatario(destinatario) : null,
             transp = new transp
             {
                 modFrete = ModalidadeFrete.mfSemFrete
             },
-            pag = new List<pag> { MapearPagamento(pedido) },
+            pag = new List<pag> { MapearPagamento(pedido, distributedDiscounts) },
             total = new total
             {
                 ICMSTot = new ICMSTot()
@@ -51,11 +54,31 @@ public static class PedidoToNFeMapper
 
         var tpAmb = pedido.Ambiente.Equals("producao", StringComparison.OrdinalIgnoreCase)
             ? TipoAmbiente.Producao : TipoAmbiente.Homologacao;
-        var detalhes = MapearProdutos(pedido.Produtos, tpAmb, emitente.Crt);
+        var detalhes = MapearProdutos(pedido.Produtos, distributedDiscounts, tpAmb, emitente.Crt);
         nfe.infNFe.det = detalhes;
-        nfe.infNFe.total.ICMSTot = CalcularICMSTot(pedido, emitente.Crt);
+        nfe.infNFe.total.ICMSTot = CalcularICMSTot(pedido, distributedDiscounts, emitente.Crt);
 
         return nfe;
+    }
+
+    private static decimal[] CalcularDescontosDistribuidos(List<ProdutoNFe> produtos, decimal globalDiscount)
+    {
+        var distributedDiscounts = new decimal[produtos.Count];
+        if (globalDiscount <= 0 || produtos.Count == 0) return distributedDiscounts;
+
+        var totalProdutos = produtos.Sum(p => p.ValorTotal);
+        if (totalProdutos > 0)
+        {
+            decimal allocatedDiscount = 0m;
+            for (int i = 0; i < produtos.Count - 1; i++)
+            {
+                var itemDiscount = Math.Round(globalDiscount * (produtos[i].ValorTotal / totalProdutos), 2);
+                distributedDiscounts[i] = itemDiscount;
+                allocatedDiscount += itemDiscount;
+            }
+            distributedDiscounts[produtos.Count - 1] = globalDiscount - allocatedDiscount;
+        }
+        return distributedDiscounts;
     }
 
     private static ide MapearIdentificacao(PedidoNFe pedido)
@@ -152,7 +175,7 @@ public static class PedidoToNFeMapper
         return dest;
     }
 
-    private static List<det> MapearProdutos(List<ProdutoNFe> produtos, TipoAmbiente tpAmb, int crt)
+    private static List<det> MapearProdutos(List<ProdutoNFe> produtos, decimal[] distributedDiscounts, TipoAmbiente tpAmb, int crt)
     {
         var detalhes = new List<det>();
 
@@ -160,6 +183,8 @@ public static class PedidoToNFeMapper
         {
             var prod = produtos[i];
             var item = i + 1;
+            var distDesc = distributedDiscounts.Length > i ? distributedDiscounts[i] : 0m;
+            var totalDesconto = prod.ValorDesconto + distDesc;
 
             var produtoNfe = new prod
             {
@@ -177,7 +202,7 @@ public static class PedidoToNFeMapper
                 qTrib = prod.Quantidade,
                 vUnTrib = prod.ValorUnitario,
                 indTot = IndicadorTotal.ValorDoItemCompoeTotalNF,
-                vDesc = prod.ValorDesconto,
+                vDesc = totalDesconto,
                 vFrete = prod.ValorFrete,
                 vSeg = prod.ValorSeguro,
                 vOutro = prod.ValorOutrasDespesas
@@ -194,16 +219,16 @@ public static class PedidoToNFeMapper
                 {
                     ICMS = new ICMS
                     {
-                        TipoICMS = MapearIcms(prod, crt)
+                        TipoICMS = MapearIcms(prod, totalDesconto, crt)
                     },
                     PIS = new PIS
                     {
                         TipoPIS = new PISOutr
                         {
                             CST = (CSTPIS)Enum.Parse(typeof(CSTPIS), $"pis{prod.CstPis}"),
-                            vBC = prod.ValorTotal - prod.ValorDesconto,
+                            vBC = prod.ValorTotal - totalDesconto,
                             pPIS = prod.AliquotaPis,
-                            vPIS = ((prod.ValorTotal - prod.ValorDesconto) * prod.AliquotaPis / 100)
+                            vPIS = ((prod.ValorTotal - totalDesconto) * prod.AliquotaPis / 100)
                         }
                     },
                     COFINS = new COFINS
@@ -211,9 +236,9 @@ public static class PedidoToNFeMapper
                         TipoCOFINS = new COFINSOutr
                         {
                             CST = (CSTCOFINS)Enum.Parse(typeof(CSTCOFINS), $"cofins{prod.CstCofins}"),
-                            vBC = prod.ValorTotal - prod.ValorDesconto,
+                            vBC = prod.ValorTotal - totalDesconto,
                             pCOFINS = prod.AliquotaCofins,
-                            vCOFINS = ((prod.ValorTotal - prod.ValorDesconto) * prod.AliquotaCofins / 100)
+                            vCOFINS = ((prod.ValorTotal - totalDesconto) * prod.AliquotaCofins / 100)
                         }
                     }
                 }
@@ -225,10 +250,10 @@ public static class PedidoToNFeMapper
         return detalhes;
     }
 
-    private static ICMSBasico MapearIcms(ProdutoNFe prod, int crt)
+    private static ICMSBasico MapearIcms(ProdutoNFe prod, decimal totalDesconto, int crt)
     {
         var ehSimplesNacional = crt is 1 or 2 or 4;
-        var vBC = prod.ValorTotal - prod.ValorDesconto;
+        var vBC = prod.ValorTotal - totalDesconto;
         var vICMS = vBC * prod.AliquotaIcms / 100;
 
         if (ehSimplesNacional)
@@ -302,7 +327,7 @@ public static class PedidoToNFeMapper
         };
     }
 
-    private static pag MapearPagamento(PedidoNFe pedido)
+    private static pag MapearPagamento(PedidoNFe pedido, decimal[] distributedDiscounts)
     {
         var dadosNfe = pedido.NFe!;
         var cnpjEmitente = pedido.Emitente?.Cnpj ?? string.Empty;
@@ -354,25 +379,46 @@ public static class PedidoToNFeMapper
 
         var totalPago = pag.detPag.Sum(p => p.vPag);
         var produtos = pedido.Produtos;
-        var vNF = produtos.Sum(p => p.ValorTotal - p.ValorDesconto + p.ValorFrete + p.ValorSeguro + p.ValorOutrasDespesas);
+        var vNF = 0m;
+        for (int i = 0; i < produtos.Count; i++)
+        {
+            var prod = produtos[i];
+            var distDesc = distributedDiscounts.Length > i ? distributedDiscounts[i] : 0m;
+            vNF += (prod.ValorTotal - (prod.ValorDesconto + distDesc) + prod.ValorFrete + prod.ValorSeguro + prod.ValorOutrasDespesas);
+        }
         pag.vTroco = totalPago > vNF ? totalPago - vNF : 0m;
 
         return pag;
     }
 
-    private static ICMSTot CalcularICMSTot(PedidoNFe pedido, int crt)
+    private static ICMSTot CalcularICMSTot(PedidoNFe pedido, decimal[] distributedDiscounts, int crt)
     {
         var produtos = pedido.Produtos;
         var vProd = produtos.Sum(p => p.ValorTotal);
         var vFrete = produtos.Sum(p => p.ValorFrete);
         var vSeg = produtos.Sum(p => p.ValorSeguro);
-        var vDesc = produtos.Sum(p => p.ValorDesconto);
+        
+        var vDesc = 0m;
+        var vBC = 0m;
+        var vICMS = 0m;
+        var ehSimplesNacional = crt is 1 or 2 or 4;
+
+        for (int i = 0; i < produtos.Count; i++)
+        {
+            var prod = produtos[i];
+            var distDesc = distributedDiscounts.Length > i ? distributedDiscounts[i] : 0m;
+            var totalDescontoItem = prod.ValorDesconto + distDesc;
+
+            vDesc += totalDescontoItem;
+            if (!ehSimplesNacional)
+            {
+                vBC += (prod.ValorTotal - totalDescontoItem);
+                vICMS += ((prod.ValorTotal - totalDescontoItem) * prod.AliquotaIcms / 100);
+            }
+        }
+
         var vOutro = produtos.Sum(p => p.ValorOutrasDespesas);
         var vNF = vProd - vDesc + vFrete + vSeg + vOutro;
-
-        var ehSimplesNacional = crt is 1 or 2 or 4;
-        var vBC = ehSimplesNacional ? 0m : produtos.Sum(p => p.ValorTotal - p.ValorDesconto);
-        var vICMS = ehSimplesNacional ? 0m : produtos.Sum(p => (p.ValorTotal - p.ValorDesconto) * p.AliquotaIcms / 100);
 
         return new ICMSTot
         {
