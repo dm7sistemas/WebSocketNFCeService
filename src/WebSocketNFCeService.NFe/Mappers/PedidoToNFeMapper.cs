@@ -18,6 +18,19 @@ using NFe.Classes.Informacoes.Transporte;
 using DFe.Classes;
 using WebSocketNFCeService.Domain.Models;
 using NFeNFe = global::NFe.Classes.NFe;
+// IBS/CBS (Reforma Tributária — NT 2025.002). Aliases pra evitar ambiguidade
+// entre os grupos de item e os de total, e com o CST de outros tributos.
+using IbsCbsItem = NFe.Classes.Informacoes.Detalhe.Tributacao.Compartilhado.IBSCBS;
+using GIbsCbs = NFe.Classes.Informacoes.Detalhe.Tributacao.Compartilhado.InformacoesIbsCbs.gIBSCBS;
+using GIbsUf = NFe.Classes.Informacoes.Detalhe.Tributacao.Compartilhado.InformacoesIbsCbs.InformacoesIbs.gIBSUF;
+using GIbsMun = NFe.Classes.Informacoes.Detalhe.Tributacao.Compartilhado.InformacoesIbsCbs.InformacoesIbs.gIBSMun;
+using GCbsItem = NFe.Classes.Informacoes.Detalhe.Tributacao.Compartilhado.InformacoesIbsCbs.InformacoesCbs.gCBS;
+using CstIbsCbsEnum = NFe.Classes.Informacoes.Detalhe.Tributacao.Compartilhado.Tipos.CST;
+using IbsCbsTot = NFe.Classes.Informacoes.Total.IbsCbs.IBSCBSTot;
+using GIbsTot = NFe.Classes.Informacoes.Total.IbsCbs.Ibs.gIBS;
+using GIbsUfTot = NFe.Classes.Informacoes.Total.IbsCbs.Ibs.gIBSUFTotal;
+using GIbsMunTot = NFe.Classes.Informacoes.Total.IbsCbs.Ibs.gIBSMunTotal;
+using GCbsTot = NFe.Classes.Informacoes.Total.IbsCbs.Cbs.gCBSTotal;
 
 namespace WebSocketNFCeService.NFe.Mappers;
 
@@ -57,6 +70,8 @@ public static class PedidoToNFeMapper
         var detalhes = MapearProdutos(pedido.Produtos, distributedDiscounts, tpAmb, emitente.Crt);
         nfe.infNFe.det = detalhes;
         nfe.infNFe.total.ICMSTot = CalcularICMSTot(pedido, distributedDiscounts, emitente.Crt);
+        // IBS/CBS: só adiciona o total se algum item trouxe o grupo (opt-in).
+        nfe.infNFe.total.IBSCBSTot = CalcularIbsCbsTot(detalhes);
 
         return nfe;
     }
@@ -240,7 +255,9 @@ public static class PedidoToNFeMapper
                             pCOFINS = prod.AliquotaCofins,
                             vCOFINS = ((prod.ValorTotal - totalDesconto) * prod.AliquotaCofins / 100)
                         }
-                    }
+                    },
+                    // IBS/CBS: só preenchido se o produto trouxe CstIbsCbs (opt-in).
+                    IBSCBS = MapearIbsCbs(prod, prod.ValorTotal - totalDesconto)
                 }
             };
 
@@ -248,6 +265,60 @@ public static class PedidoToNFeMapper
         }
 
         return detalhes;
+    }
+
+    // Monta o grupo <IBSCBS> do item (Reforma Tributária). Retorna null quando o
+    // produto não trouxe CstIbsCbs — nesse caso a nota sai como antes (sem IBS/CBS).
+    // As alíquotas (IBS UF, IBS Municipal, CBS) vêm do payload/configuração.
+    private static IbsCbsItem? MapearIbsCbs(ProdutoNFe prod, decimal vBc)
+    {
+        if (string.IsNullOrWhiteSpace(prod.CstIbsCbs)) return null;
+
+        var vIbsUf = Math.Round(vBc * prod.AliquotaIbsUf / 100m, 2);
+        var vIbsMun = Math.Round(vBc * prod.AliquotaIbsMun / 100m, 2);
+        var vCbs = Math.Round(vBc * prod.AliquotaCbs / 100m, 2);
+
+        return new IbsCbsItem
+        {
+            CST = (CstIbsCbsEnum)Enum.Parse(typeof(CstIbsCbsEnum), $"Cst{prod.CstIbsCbs}"),
+            cClassTrib = prod.CClassTrib,
+            gIBSCBS = new GIbsCbs
+            {
+                vBC = vBc,
+                gIBSUF = new GIbsUf { pIBSUF = prod.AliquotaIbsUf, vIBSUF = vIbsUf },
+                gIBSMun = new GIbsMun { pIBSMun = prod.AliquotaIbsMun, vIBSMun = vIbsMun },
+                vIBS = vIbsUf + vIbsMun,
+                gCBS = new GCbsItem { pCBS = prod.AliquotaCbs, vCBS = vCbs }
+            }
+        };
+    }
+
+    // Totais <IBSCBSTot> — soma os valores dos itens que têm o grupo IBS/CBS.
+    // Retorna null se nenhum item tiver (mantém a nota antiga sem o total).
+    private static IbsCbsTot? CalcularIbsCbsTot(List<det> detalhes)
+    {
+        var comIbsCbs = detalhes
+            .Where(d => d.imposto?.IBSCBS?.gIBSCBS is not null)
+            .Select(d => d.imposto.IBSCBS.gIBSCBS)
+            .ToList();
+        if (comIbsCbs.Count == 0) return null;
+
+        var vBc = comIbsCbs.Sum(g => g.vBC);
+        var vIbsUf = comIbsCbs.Sum(g => g.gIBSUF?.vIBSUF ?? 0m);
+        var vIbsMun = comIbsCbs.Sum(g => g.gIBSMun?.vIBSMun ?? 0m);
+        var vCbs = comIbsCbs.Sum(g => g.gCBS?.vCBS ?? 0m);
+
+        return new IbsCbsTot
+        {
+            vBCIBSCBS = vBc,
+            gIBS = new GIbsTot
+            {
+                gIBSUF = new GIbsUfTot { vIBSUF = vIbsUf },
+                gIBSMun = new GIbsMunTot { vIBSMun = vIbsMun },
+                vIBS = vIbsUf + vIbsMun
+            },
+            gCBS = new GCbsTot { vCBS = vCbs }
+        };
     }
 
     private static ICMSBasico MapearIcms(ProdutoNFe prod, decimal totalDesconto, int crt)
