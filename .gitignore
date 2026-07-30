@@ -10,3 +10,7 @@ Xmls/
 appsettings.json
 appsettings.Development.json
 launchSettings.json
+
+# Saída do dotnet publish: 90 binários que não pertencem ao repositório.
+# (appsettings.json já é coberto pela regra acima, em qualquer profundidade.)
+publish/
