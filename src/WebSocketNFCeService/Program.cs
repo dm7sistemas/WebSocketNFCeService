@@ -67,7 +67,21 @@ app.MapGet("/health", () => Results.Ok(new
     wsEndpoint = $"ws://localhost:{wsConfig.Porta}{wsConfig.Path}"
 }));
 
-app.Urls.Add($"http://0.0.0.0:{wsConfig.Porta}");
+// LOOPBACK, não 0.0.0.0.
+//
+// Em 0.0.0.0 o serviço atendia em TODAS as interfaces da máquina — Ethernet,
+// Wi-Fi, Hyper-V, VPN. Qualquer aparelho na rede do salão abria
+// http://<ip-da-maquina>:5000/ws/nfce e emitia NFC-e no CNPJ do restaurante:
+// sem token, sem passar pelo electron-print, sem passar pela Cloudflare. Era o
+// último caminho que escapava da autenticação.
+//
+// Quem consome este serviço é o electron-print, que conecta em
+// ws://127.0.0.1:5000/ws/nfce (endereço fixo no main.js dele). Os dois sempre
+// moram na mesma máquina, então nada legítimo vem de fora e nada quebra.
+//
+// Vale mais que regra de firewall: com o socket fora da interface, o sistema
+// recusa a conexão na origem. Não é filtro que alguém desabilita sem querer.
+app.Urls.Add($"http://127.0.0.1:{wsConfig.Porta}");
 
 var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
 var loggerProgram = loggerFactory.CreateLogger<Program>();

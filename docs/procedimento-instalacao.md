@@ -230,8 +230,17 @@ Em caso de rejeição:
 | Normal | 40 | Isenta |
 
 ### Portas
-- Firewall deve liberar a porta configurada (5000)
-- Serviço roda em `http://0.0.0.0:{porta}`
+- Serviço escuta em `http://127.0.0.1:{porta}` — **somente loopback**
+- **Não** libere a porta 5000 no firewall, e não a exponha na rede
+
+Até 2026-07 o serviço subia em `0.0.0.0`, ou seja, atendia em todas as
+interfaces da máquina. Qualquer aparelho na rede do salão abria
+`http://<ip-da-maquina>:5000/ws/nfce` e emitia NFC-e no CNPJ do restaurante,
+sem credencial nenhuma — sem passar pelo `electron-print` nem pela Cloudflare.
+
+Quem consome este serviço é o `electron-print`, que roda na **mesma máquina** e
+conecta em `ws://127.0.0.1:5000/ws/nfce`. Nada legítimo vem de fora. Todo acesso
+externo entra pelo túnel, no `electron-print`, que exige token.
 
 ### Logs
 - Console + Windows Event Log (fonte: `AZFoodWebSocketNFCe`)
