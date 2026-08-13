@@ -116,7 +116,7 @@ public class NFeWebSocketHandler
             await EnviarRespostaAsync(webSocket, new ResultadoNFe
             {
                 Sucesso = false,
-                Motivo = "Campo 'tipo' é obrigatório. Use \"setup\" ou \"nfce\".",
+                Motivo = "Campo 'tipo' é obrigatório. Use \"setup\", \"nfe\" ou \"nfce\".",
                 Erros = { new ErroNFe { Codigo = -1, Mensagem = "tipo não informado" } }
             }, ct);
             return;
@@ -128,6 +128,7 @@ public class NFeWebSocketHandler
                 await ProcessarSetupAsync(webSocket, json, ct);
                 break;
 
+            case "nfe":
             case "nfce":
                 _logger.LogInformation("JSON RECEBIDO: {Json}", json);
                 await ProcessarNfceAsync(webSocket, json, ct);
@@ -285,6 +286,27 @@ public class NFeWebSocketHandler
                 erros.Add(new ErroNFe { Codigo = 6, Mensagem = "Número da NFe é obrigatório" });
             if (pedido.NFe.Serie <= 0)
                 erros.Add(new ErroNFe { Codigo = 7, Mensagem = "Série da NFe é obrigatória" });
+
+            if (pedido.NFe.Modelo == 55)
+            {
+                if (pedido.Destinatario is null)
+                {
+                    erros.Add(new ErroNFe { Codigo = 15, Mensagem = "Para NFe (Modelo 55), o destinatário é obrigatório" });
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(pedido.Destinatario.Cpf) && string.IsNullOrWhiteSpace(pedido.Destinatario.Cnpj))
+                        erros.Add(new ErroNFe { Codigo = 16, Mensagem = "Para NFe, CPF ou CNPJ do destinatário é obrigatório" });
+                    
+                    if (string.IsNullOrWhiteSpace(pedido.Destinatario.Logradouro) || 
+                        string.IsNullOrWhiteSpace(pedido.Destinatario.Municipio) ||
+                        pedido.Destinatario.CodigoMunicipio <= 0 ||
+                        string.IsNullOrWhiteSpace(pedido.Destinatario.Uf))
+                    {
+                        erros.Add(new ErroNFe { Codigo = 17, Mensagem = "Para NFe, o endereço completo do destinatário (Logradouro, Municipio, CodigoMunicipio, UF) é obrigatório" });
+                    }
+                }
+            }
         }
 
         if (pedido.Produtos is null || pedido.Produtos.Count == 0)

@@ -70,7 +70,7 @@ public class NFeService : INFeService
                 configuracao.cUF,
                 nfe.infNFe.ide.dhEmi,
                 pedido.Emitente!.Cnpj,
-                ModeloDocumento.NFCe,
+                pedido.NFe!.Modelo == 55 ? ModeloDocumento.NFe : ModeloDocumento.NFCe,
                 nfe.infNFe.ide.serie,
                 nfe.infNFe.ide.nNF,
                 (int)nfe.infNFe.ide.tpEmis,
@@ -80,8 +80,9 @@ public class NFeService : INFeService
             nfe.infNFe.ide.cDV = dadosChave.DigitoVerificador;
             var idLote = Convert.ToInt32(nfe.infNFe.ide.nNF);
 
-            _logger.LogInformation("Emitindo NFCe {Chave} - Ambiente: {Ambiente}",
-                chave, pedido.Ambiente);
+            var docName = pedido.NFe!.Modelo == 55 ? "NFe" : "NFCe";
+            _logger.LogInformation("Emitindo {DocName} {Chave} - Ambiente: {Ambiente}",
+                docName, chave, pedido.Ambiente);
 
             var certificado = CarregarCertificado();
             if (certificado != null)
@@ -134,8 +135,8 @@ public class NFeService : INFeService
                     resultado.Serie = nfe.infNFe.ide.serie;
                     resultado.XmlAutorizado = procNfeXml;
 
-                    _logger.LogInformation("NFCe autorizada: {Chave} - Protocolo: {Prot}",
-                        chave, prot.infProt.nProt);
+                    _logger.LogInformation("{DocName} autorizada: {Chave} - Protocolo: {Prot}",
+                        docName, chave, prot.infProt.nProt);
 
                     SalvarXmlLocal(procNfeXml, chave, configuracao.DiretorioSalvarXml);
                     var dirPdf = configuracao.DiretorioSalvarXml?.Replace("Xmls", "Pdfs");
@@ -155,13 +156,14 @@ public class NFeService : INFeService
                     Mensagem = xMotivo
                 });
 
-                _logger.LogWarning("NFCe rejeitada: {Chave} - Status {Status}: {Motivo}",
-                    chave, cStat, xMotivo);
+                _logger.LogWarning("{DocName} rejeitada: {Chave} - Status {Status}: {Motivo}",
+                    docName, chave, cStat, xMotivo);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Erro ao emitir NFCe {Id}", pedido.Id);
+            var docNameCatch = pedido.NFe?.Modelo == 55 ? "NFe" : "NFCe";
+            _logger.LogError(ex, "Erro ao emitir {DocName} {Id}", docNameCatch, pedido.Id);
             resultado.Sucesso = false;
             resultado.Motivo = ex.Message;
             resultado.Erros.Add(new ErroNFe
@@ -188,7 +190,7 @@ public class NFeService : INFeService
             tpEmis = TipoEmissao.teNormal,
             TimeOut = setup?.Timeout ?? _fallbackConfig.Timeout,
             VersaoNFeAutorizacao = VersaoServico.Versao400,
-            ModeloDocumento = ModeloDocumento.NFCe,
+            ModeloDocumento = pedido.NFe!.Modelo == 55 ? ModeloDocumento.NFe : ModeloDocumento.NFCe,
             DiretorioSchemas = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Schemas"),
             DiretorioSalvarXml = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Xmls", DateTime.Now.ToString("yyyyMM")),
             SalvarXmlServicos = true,

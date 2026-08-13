@@ -28,6 +28,9 @@ public class DadosNFe
     [JsonPropertyName("numero")]
     public int Numero { get; set; }
 
+    [JsonPropertyName("modelo")]
+    public int Modelo { get; set; } = 65;
+
     [JsonPropertyName("serie")]
     public int Serie { get; set; }
 
