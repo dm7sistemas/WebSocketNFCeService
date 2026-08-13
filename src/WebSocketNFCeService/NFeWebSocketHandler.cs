@@ -309,6 +309,31 @@ public class NFeWebSocketHandler
             }
         }
 
+        // COBRANCA: opcional. Mas se vier, a soma das duplicatas tem que fechar
+        // com o valor liquido da fatura -- a SEFAZ confere, e rejeicao dela
+        // QUEIMA o numero da serie. Barrar aqui custa nada; barrar la custa uma
+        // inutilizacao.
+        if (pedido.Cobranca?.Duplicatas is { Count: > 0 } dups)
+        {
+            var soma = dups.Sum(d => d.Valor);
+            var liquido = pedido.Cobranca.Fatura?.ValorLiquido;
+            if (liquido.HasValue && Math.Abs(liquido.Value - soma) > 0.01m)
+            {
+                erros.Add(new ErroNFe
+                {
+                    Codigo = 18,
+                    Mensagem = $"A soma das duplicatas ({soma:N2}) nao bate com o valor liquido da fatura ({liquido.Value:N2})"
+                });
+            }
+            for (int i = 0; i < dups.Count; i++)
+            {
+                if (dups[i].Valor <= 0)
+                    erros.Add(new ErroNFe { Codigo = 19, Mensagem = $"Duplicata [{i}]: valor deve ser maior que zero" });
+                if (string.IsNullOrWhiteSpace(dups[i].Vencimento))
+                    erros.Add(new ErroNFe { Codigo = 20, Mensagem = $"Duplicata [{i}]: vencimento e obrigatorio" });
+            }
+        }
+
         if (pedido.Produtos is null || pedido.Produtos.Count == 0)
         {
             erros.Add(new ErroNFe { Codigo = 8, Mensagem = "Pelo menos um produto é obrigatório" });
@@ -326,6 +351,20 @@ public class NFeWebSocketHandler
                     erros.Add(new ErroNFe { Codigo = 11, Mensagem = $"Produto [{i}]: quantidade deve ser maior que zero" });
                 if (p.ValorUnitario <= 0)
                     erros.Add(new ErroNFe { Codigo = 12, Mensagem = $"Produto [{i}]: valor unitário deve ser maior que zero" });
+
+                // LOTE: opcional, mas INDIVISIVEL. O schema exige nLote, qLote,
+                // dFab e dVal juntos; mandar so o numero do lote faz a SEFAZ
+                // rejeitar a nota INTEIRA. Recusar antes e a diferenca entre
+                // corrigir um campo e inutilizar um numero.
+                foreach (var (lote, j) in (p.Lotes ?? new List<LoteProduto>()).Select((l, j) => (l, j)))
+                {
+                    if (string.IsNullOrWhiteSpace(lote.Numero))
+                        erros.Add(new ErroNFe { Codigo = 21, Mensagem = $"Produto [{i}] lote [{j}]: numero do lote e obrigatorio" });
+                    if (lote.Quantidade <= 0)
+                        erros.Add(new ErroNFe { Codigo = 22, Mensagem = $"Produto [{i}] lote [{j}]: quantidade do lote deve ser maior que zero" });
+                    if (string.IsNullOrWhiteSpace(lote.Fabricacao) || string.IsNullOrWhiteSpace(lote.Validade))
+                        erros.Add(new ErroNFe { Codigo = 23, Mensagem = $"Produto [{i}] lote [{j}]: fabricacao e validade sao obrigatorias quando o lote e informado" });
+                }
 
                 var crt = pedido.Emitente?.Crt ?? 3;
                 var ehSimplesNacional = crt is 1 or 2 or 4;

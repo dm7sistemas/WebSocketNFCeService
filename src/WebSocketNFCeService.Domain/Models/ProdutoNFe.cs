@@ -85,4 +85,9 @@ public class ProdutoNFe
     // Alíquota da CBS (%).
     [JsonPropertyName("aliquotaCbs")]
     public decimal AliquotaCbs { get; set; }
+
+    /// Rastreabilidade por lote (grupo `rastro`). Opcional; um item pode ter
+    /// mais de um lote quando a quantidade vendida veio de lotes diferentes.
+    [JsonPropertyName("lotes")]
+    public List<LoteProduto>? Lotes { get; set; }
 }

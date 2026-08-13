@@ -44,7 +44,11 @@ var wsConfig = app.Configuration
     .GetSection(WebSocketConfig.SectionName)
     .Get<WebSocketConfig>() ?? new WebSocketConfig();
 
-app.Map(wsConfig.Path, async (HttpContext context) =>
+// NFC-e e NF-e são multiplexadas pelo campo "tipo" da mensagem, mas o
+// electron-print abre duas conexões distintas: /ws/nfce e /ws/nfe. Por isso
+// registramos o MESMO handler nos dois caminhos — quem decide entre modelo 55
+// e 65 é a mensagem recebida (tipo "nfe"/"nfce").
+Func<HttpContext, Task> handleWebSocket = async context =>
 {
     if (context.WebSockets.IsWebSocketRequest)
     {
@@ -58,14 +62,42 @@ app.Map(wsConfig.Path, async (HttpContext context) =>
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
         await context.Response.WriteAsync("WebSocket required");
     }
-});
+};
 
-app.MapGet("/health", () => Results.Ok(new
+app.Map(wsConfig.Path, handleWebSocket);   // /ws/nfce (NFC-e — modelo 65)
+app.Map("/ws/nfe", handleWebSocket);       // /ws/nfe  (NF-e  — modelo 55)
+
+// A versao sai do assembly, e nao de uma constante escrita a mao: constante em
+// codigo mente na primeira vez que alguem esquece de atualizar.
+var versaoServico = System.Reflection.Assembly.GetExecutingAssembly()
+    .GetName().Version?.ToString() ?? "0.0.0";
+
+// RECURSOS, e nao so a versao. O electron-print reporta os dele; este reporta os
+// deste servico -- os dois sao instalados juntos, mas nada garante que estejam
+// na mesma versao, e quem emite a nota e este.
+string[] recursosDoServico =
+[
+    "nfce",       // modelo 65
+    "nfe",        // modelo 55
+    "lote",       // grupo rastro por item
+    "transporte", // transp: modalidade, transportadora, veiculo, volumes
+    "cobranca",   // cobr: fatura + duplicatas
+    "infAdic",
+    "danfeA4",
+    "ibscbs",     // Reforma Tributaria
+];
+
+object HealthPayload(string wsPath) => new
 {
     status = "running",
     service = "AZFoodWebSocketNFCe",
-    wsEndpoint = $"ws://localhost:{wsConfig.Porta}{wsConfig.Path}"
-}));
+    versao = versaoServico,
+    recursos = recursosDoServico,
+    wsEndpoint = $"ws://localhost:{wsConfig.Porta}{wsPath}"
+};
+
+app.MapGet("/health", () => Results.Ok(HealthPayload(wsConfig.Path)));
+app.MapGet("/health-nfe", () => Results.Ok(HealthPayload("/ws/nfe")));
 
 // LOOPBACK, não 0.0.0.0.
 //

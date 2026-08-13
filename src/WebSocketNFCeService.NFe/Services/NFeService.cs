@@ -98,12 +98,17 @@ public class NFeService : INFeService
                 throw new InvalidOperationException("Nenhum certificado configurado. Envie setup com certificado ou configure no appsettings.");
             }
 
-            var csc = ObterCsc();
-            var qrCodeVersao = VersaoQrCode.QrCodeVersao2;
-            nfe.infNFeSupl = new infNFeSupl();
-            nfe.infNFeSupl.urlChave = nfe.infNFeSupl.ObterUrlConsulta(nfe, qrCodeVersao);
-            nfe.infNFeSupl.qrCode = nfe.infNFeSupl.ObterUrlQrCode(nfe, qrCodeVersao,
-                csc.IdToken, csc.Token, null);
+            // QR Code / infNFeSupl é exclusivo da NFC-e (modelo 65). Na NF-e
+            // (modelo 55) esse grupo é inválido e provoca rejeição/erro de schema.
+            if (pedido.NFe!.Modelo != 55)
+            {
+                var csc = ObterCsc();
+                var qrCodeVersao = VersaoQrCode.QrCodeVersao2;
+                nfe.infNFeSupl = new infNFeSupl();
+                nfe.infNFeSupl.urlChave = nfe.infNFeSupl.ObterUrlConsulta(nfe, qrCodeVersao);
+                nfe.infNFeSupl.qrCode = nfe.infNFeSupl.ObterUrlQrCode(nfe, qrCodeVersao,
+                    csc.IdToken, csc.Token, null);
+            }
 
             nfe.Valida(configuracao);
 

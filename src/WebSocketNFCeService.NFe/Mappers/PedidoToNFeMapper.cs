@@ -15,6 +15,8 @@ using NFe.Classes.Informacoes.Pagamento;
 using NFe.Classes.Informacoes.Total;
 using NFe.Classes.Informacoes.Destinatario;
 using NFe.Classes.Informacoes.Transporte;
+using NFe.Classes.Informacoes.Cobranca;
+using NFe.Classes.Informacoes.Observacoes;
 using DFe.Classes;
 using WebSocketNFCeService.Domain.Models;
 using NFeNFe = global::NFe.Classes.NFe;
@@ -54,16 +56,18 @@ public static class PedidoToNFeMapper
                     (!string.IsNullOrWhiteSpace(destinatario.Cpf) ||
                      !string.IsNullOrWhiteSpace(destinatario.Cnpj))
                  ? MapearDestinatario(destinatario) : null,
-            transp = new transp
-            {
-                modFrete = ModalidadeFrete.mfSemFrete
-            },
+            transp = MapearTransporte(pedido.Transporte),
             pag = new List<pag> { MapearPagamento(pedido, distributedDiscounts) },
             total = new total
             {
                 ICMSTot = new ICMSTot()
             }
         };
+
+        // Os dois grupos abaixo ficam NULOS quando nao vieram -- nota sem fatura e
+        // sem observacao e valida, e era assim que este servico sempre emitiu.
+        nfe.infNFe.cobr = MapearCobranca(pedido.Cobranca);
+        nfe.infNFe.infAdic = MapearInformacoesAdicionais(pedido.InformacoesAdicionais);
 
         var tpAmb = pedido.Ambiente.Equals("producao", StringComparison.OrdinalIgnoreCase)
             ? TipoAmbiente.Producao : TipoAmbiente.Homologacao;
@@ -112,7 +116,7 @@ public static class PedidoToNFeMapper
             nNF = dadosNfe.Numero,
             dhEmi = DateTime.Now,
             tpNF = TipoNFe.tnSaida,
-            idDest = DestinoOperacao.doInterna,
+            idDest = DeterminarIdDest(pedido),
             cMunFG = emitente.CodigoMunicipio,
             tpImp = dadosNfe.Modelo == 55 ? TipoImpressao.tiRetrato : TipoImpressao.tiNFCe,
             tpEmis = TipoEmissao.teNormal,
@@ -125,6 +129,27 @@ public static class PedidoToNFeMapper
             procEmi = ProcessoEmissao.peAplicativoContribuinte,
             verProc = "WebSocketNFCe 1.0"
         };
+    }
+
+    // idDest da NF-e depende da UF do destinatário: interna, interestadual ou
+    // exterior. A NFC-e (modelo 65) é sempre operação interna.
+    private static DestinoOperacao DeterminarIdDest(PedidoNFe pedido)
+    {
+        if (pedido.NFe!.Modelo != 55)
+            return DestinoOperacao.doInterna;
+
+        var ufEmit = pedido.Emitente?.Uf?.Trim().ToUpperInvariant();
+        var ufDest = pedido.Destinatario?.Uf?.Trim().ToUpperInvariant();
+
+        if (string.IsNullOrWhiteSpace(ufDest))
+            return DestinoOperacao.doInterna;
+
+        if (ufDest is "EX" or "EXTERIOR")
+            return DestinoOperacao.doExterior;
+
+        return string.Equals(ufEmit, ufDest, StringComparison.Ordinal)
+            ? DestinoOperacao.doInterna
+            : DestinoOperacao.doInterestadual;
     }
 
     private static emit MapearEmitente(Emitente emitente)
@@ -153,6 +178,134 @@ public static class PedidoToNFeMapper
                 cPais = 1058,
                 xPais = "BRASIL"
             }
+        };
+    }
+
+    // ── Grupos exclusivos da NF-e ───────────────────────────────────────────
+    //
+    // Os tres sao OPCIONAIS por decisao: quem nao mandar continua emitindo como
+    // sempre. Nenhum deles derruba a nota por ausencia.
+
+    /// Aceita "2026-09-15" e "2026-09-15T00:00:00Z". Data invalida vira null, e
+    /// quem chamou decide o que fazer -- nunca uma data inventada em silencio.
+    private static DateTime? ParseData(string? iso)
+    {
+        if (string.IsNullOrWhiteSpace(iso)) return null;
+        return DateTime.TryParse(iso, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeLocal,
+            out var d) ? d.Date : null;
+    }
+
+    private static string? SoDigitos(string? valor) =>
+        string.IsNullOrWhiteSpace(valor) ? null : new string(valor.Where(char.IsDigit).ToArray());
+
+    /// `transp` SEMPRE existe no XML -- o que muda e a modalidade. Sem grupo
+    /// informado, mantem 9 (sem frete), que e o que este servico fazia fixo.
+    private static transp MapearTransporte(Transporte? t)
+    {
+        var mapeado = new transp
+        {
+            modFrete = t?.ModalidadeFrete is int m && Enum.IsDefined(typeof(ModalidadeFrete), m)
+                ? (ModalidadeFrete)m
+                : ModalidadeFrete.mfSemFrete
+        };
+
+        if (t is null) return mapeado;
+
+        var tr = t.Transportadora;
+        if (tr is not null &&
+            (!string.IsNullOrWhiteSpace(tr.Nome) || !string.IsNullOrWhiteSpace(tr.Cnpj) || !string.IsNullOrWhiteSpace(tr.Cpf)))
+        {
+            mapeado.transporta = new transporta
+            {
+                xNome = tr.Nome,
+                // CNPJ e CPF sao mutuamente exclusivos no schema: mandar os dois
+                // rejeita a nota.
+                CNPJ = SoDigitos(tr.Cnpj),
+                CPF = string.IsNullOrWhiteSpace(tr.Cnpj) ? SoDigitos(tr.Cpf) : null,
+                IE = SoDigitos(tr.InscricaoEstadual),
+                xEnder = tr.Endereco,
+                xMun = tr.Municipio,
+                UF = tr.Uf
+            };
+        }
+
+        if (!string.IsNullOrWhiteSpace(t.Placa))
+        {
+            mapeado.veicTransp = new veicTransp
+            {
+                placa = t.Placa.Replace("-", "").Trim().ToUpperInvariant(),
+                UF = t.UfPlaca,
+                RNTC = t.Rntc
+            };
+        }
+
+        if (t.Volumes is { Count: > 0 })
+        {
+            mapeado.vol = t.Volumes
+                .Select(v => new vol
+                {
+                    qVol = v.Quantidade,
+                    esp = v.Especie,
+                    marca = v.Marca,
+                    nVol = v.Numeracao,
+                    pesoL = v.PesoLiquido,
+                    pesoB = v.PesoBruto
+                })
+                .ToList();
+        }
+
+        return mapeado;
+    }
+
+    /// A SEFAZ confere que a soma das duplicatas bate com o valor liquido da
+    /// fatura. Por isso a fatura e DERIVADA das duplicatas quando nao vier
+    /// pronta: essa conta nunca deve depender de quem chamou.
+    private static cobr? MapearCobranca(Cobranca? c)
+    {
+        if (c is null) return null;
+
+        var duplicatas = (c.Duplicatas ?? new List<Duplicata>())
+            .Where(d => d.Valor > 0)
+            .ToList();
+
+        if (duplicatas.Count == 0 && c.Fatura is null) return null;
+
+        var soma = duplicatas.Sum(d => d.Valor);
+
+        return new cobr
+        {
+            fat = new fat
+            {
+                nFat = c.Fatura?.Numero,
+                vOrig = c.Fatura?.ValorOriginal ?? (soma > 0 ? soma : null),
+                vDesc = c.Fatura?.ValorDesconto,
+                vLiq = c.Fatura?.ValorLiquido ?? (soma > 0 ? soma : null)
+            },
+            dup = duplicatas.Count == 0
+                ? null
+                : duplicatas
+                    .Select((d, i) => new dup
+                    {
+                        // Numeracao sequencial de 3 digitos quando nao vier: e o
+                        // formato que a maioria dos ERPs usa e que o DANFE espera.
+                        nDup = string.IsNullOrWhiteSpace(d.Numero) ? (i + 1).ToString("000") : d.Numero,
+                        dVenc = ParseData(d.Vencimento),
+                        vDup = d.Valor
+                    })
+                    .ToList()
+        };
+    }
+
+    private static infAdic? MapearInformacoesAdicionais(InformacoesAdicionais? i)
+    {
+        if (i is null) return null;
+        if (string.IsNullOrWhiteSpace(i.Complementar) && string.IsNullOrWhiteSpace(i.Fisco)) return null;
+
+        return new infAdic
+        {
+            infCpl = string.IsNullOrWhiteSpace(i.Complementar) ? null : i.Complementar.Trim(),
+            infAdFisco = string.IsNullOrWhiteSpace(i.Fisco) ? null : i.Fisco.Trim()
         };
     }
 
@@ -222,6 +375,22 @@ public static class PedidoToNFeMapper
                 vSeg = prod.ValorSeguro,
                 vOutro = prod.ValorOutrasDespesas
             };
+
+            // Rastreabilidade por lote. So entra quando veio -- item sem lote sai
+            // exatamente como antes.
+            if (prod.Lotes is { Count: > 0 })
+            {
+                produtoNfe.rastro = prod.Lotes
+                    .Select(l => new rastro
+                    {
+                        nLote = l.Numero,
+                        qLote = l.Quantidade,
+                        dFab = ParseData(l.Fabricacao) ?? DateTime.Today,
+                        dVal = ParseData(l.Validade) ?? DateTime.Today,
+                        cAgreg = string.IsNullOrWhiteSpace(l.CodigoAgregacao) ? null : l.CodigoAgregacao
+                    })
+                    .ToList();
+            }
 
             produtoNfe.cEAN = !string.IsNullOrWhiteSpace(prod.CodigoBarras) ? prod.CodigoBarras : "SEM GTIN";
             produtoNfe.cEANTrib = !string.IsNullOrWhiteSpace(prod.CodigoBarras) ? prod.CodigoBarras : "SEM GTIN";
