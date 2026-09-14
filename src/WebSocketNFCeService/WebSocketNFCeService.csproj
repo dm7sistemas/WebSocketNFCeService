@@ -9,8 +9,9 @@
     <NoWarn>CA1416</NoWarn>
       <!-- Versao do servico. E ela que sai no /health e no /health-nfe, e e como o
          AZFood sabe o que a maquina do restaurante suporta. Subir aqui ao mudar
-         o contrato do payload. 1.1 = NF-e modelo 55 + transp/cobr/infAdic/rastro. -->
-    <Version>1.1.0</Version>
+         o contrato do payload. 1.1 = NF-e modelo 55 + transp/cobr/infAdic/rastro.
+         1.2 = IE do destinatario (inscricaoEstadual) + nome em branco omitido. -->
+    <Version>1.3.0</Version>
 </PropertyGroup>
 
   <ItemGroup>

@@ -1,4 +1,4 @@
-using DFe.Classes.Entidades;
+﻿using DFe.Classes.Entidades;
 using DFe.Classes.Flags;
 using NFe.Classes;
 using NFe.Classes.Informacoes;
@@ -106,6 +106,23 @@ public static class PedidoToNFeMapper
         var dadosNfe = pedido.NFe!;
         var estado = ObterEstado(emitente.Uf);
 
+        // NT 2020.006: quando o comprador NAO esta presente, a SEFAZ exige junto
+        // o indicador de intermediador -- a nota tem que dizer se a venda veio de
+        // plataforma propria ou de marketplace. Sem a tag, rejeita com "NF-e sem
+        // indicativo do intermediador", que foi o que aconteceu na primeira
+        // emissao de NF-e (indPres 9, entrega).
+        //
+        // Aqui e SEMPRE 0: a venda nasce no proprio restaurante (PDV/site do
+        // AZFood), nunca em marketplace de terceiro. O dia em que existir NF-e de
+        // pedido iFood, este e o ponto que muda -- vira 1 mais o grupo
+        // infIntermed com o CNPJ do intermediador.
+        //
+        // Venda presencial (indPres 1, o caso da NFC-e) NAO leva a tag: informar
+        // onde nao se aplica e outra rejeicao. Por isso o null -- a propriedade e
+        // anulavel, e o `indIntermedSpecified` da biblioteca (somente leitura)
+        // deriva dela para decidir se a tag entra no XML.
+        var compradorAusente = dadosNfe.PresencaComprador is 2 or 3 or 4 or 9;
+
         return new ide
         {
             cUF = estado,
@@ -126,6 +143,7 @@ public static class PedidoToNFeMapper
             indFinal = dadosNfe.ConsumidorFinal == 1
                 ? ConsumidorFinal.cfConsumidorFinal : ConsumidorFinal.cfNao,
             indPres = (PresencaComprador)dadosNfe.PresencaComprador,
+            indIntermed = compradorAusente ? IndicadorIntermediador.iiSemIntermediador : null,
             procEmi = ProcessoEmissao.peAplicativoContribuinte,
             verProc = "WebSocketNFCe 1.0"
         };
@@ -287,9 +305,13 @@ public static class PedidoToNFeMapper
                 : duplicatas
                     .Select((d, i) => new dup
                     {
-                        // Numeracao sequencial de 3 digitos quando nao vier: e o
-                        // formato que a maioria dos ERPs usa e que o DANFE espera.
-                        nDup = string.IsNullOrWhiteSpace(d.Numero) ? (i + 1).ToString("000") : d.Numero,
+                        // SEMPRE a posicao, com 3 algarismos -- o que vier em
+                        // `Numero` e ignorado de proposito. A SEFAZ so aceita
+                        // 001, 002, 003 em sequencia; "01", "1840/1" ou uma lacuna
+                        // voltam como "Numero da parcela invalido ou nao
+                        // informado", e cada recusa conta para o bloqueio de
+                        // consumo indevido. GRAVETOS, 12/09/2026.
+                        nDup = (i + 1).ToString("000"),
                         dVenc = ParseData(d.Vencimento),
                         vDup = d.Valor
                     })
@@ -304,18 +326,43 @@ public static class PedidoToNFeMapper
 
         return new infAdic
         {
-            infCpl = string.IsNullOrWhiteSpace(i.Complementar) ? null : i.Complementar.Trim(),
-            infAdFisco = string.IsNullOrWhiteSpace(i.Fisco) ? null : i.Fisco.Trim()
+            infCpl = TextoDoSchema(i.Complementar, 5000),
+            infAdFisco = TextoDoSchema(i.Fisco, 2000)
         };
+    }
+
+    // Uma linha so, sem espaco nas pontas e dentro do tamanho do schema.
+    //
+    // Os dois campos sao TString: quebra de linha e tabulacao sao caracteres de
+    // controle e reprovam o XML inteiro na validacao. `Trim()` so tirava as
+    // pontas -- um Enter entre duas frases passava, e foi o que derrubou a nota
+    // no GRAVETOS em 11/09/2026. O Split sem separador quebra em QUALQUER espaco
+    // em branco (inclusive \r, \n e \t), e o Join devolve tudo com um espaco so.
+    private static string? TextoDoSchema(string? texto, int maximo)
+    {
+        if (string.IsNullOrWhiteSpace(texto)) return null;
+        var umaLinha = string.Join(" ", texto.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return umaLinha.Length > maximo ? umaLinha.Substring(0, maximo).TrimEnd() : umaLinha;
     }
 
     private static dest MapearDestinatario(Destinatario destinatario)
     {
         var dest = new dest(VersaoServico.Versao400)
         {
-            xNome = destinatario.Nome,
+            // Em branco vira NULO, e nulo nao entra no XML. A tag vazia e o que a
+            // SEFAZ recusa no schema ("the value '' is invalid"); a tag ausente e
+            // valida na NFC-e com CPF/CNPJ. A NF-e exige nome -- quem barra e o
+            // Validar do handler, antes de gastar uma tentativa na SEFAZ.
+            xNome = string.IsNullOrWhiteSpace(destinatario.Nome) ? null : destinatario.Nome.Trim(),
             indIEDest = (indIEDest)destinatario.IndicadorIE
         };
+
+        // A IE so vai com indIEDest = 1 (contribuinte). Com 2 (isento) ou 9 (nao
+        // contribuinte), informar a IE e outra rejeicao -- mesma regra que o
+        // emitente e a transportadora ja seguiam, e que so o destinatario nao
+        // tinha.
+        if (destinatario.IndicadorIE == 1)
+            dest.IE = SoDigitos(destinatario.InscricaoEstadual);
 
         if (!string.IsNullOrWhiteSpace(destinatario.Logradouro) &&
             !string.IsNullOrWhiteSpace(destinatario.Municipio) &&
@@ -335,10 +382,12 @@ public static class PedidoToNFeMapper
             };
         }
 
-        if (!string.IsNullOrEmpty(destinatario.Cpf))
-            dest.CPF = destinatario.Cpf;
-        else if (!string.IsNullOrEmpty(destinatario.Cnpj))
-            dest.CNPJ = destinatario.Cnpj;
+        // So digitos, como a transportadora ja fazia: "123.456.789-09" copiado de
+        // um cadastro passava direto e o XML saia com a mascara.
+        if (!string.IsNullOrWhiteSpace(destinatario.Cpf))
+            dest.CPF = SoDigitos(destinatario.Cpf);
+        else if (!string.IsNullOrWhiteSpace(destinatario.Cnpj))
+            dest.CNPJ = SoDigitos(destinatario.Cnpj);
 
         return dest;
     }

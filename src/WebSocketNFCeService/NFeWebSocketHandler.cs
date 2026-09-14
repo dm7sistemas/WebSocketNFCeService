@@ -29,17 +29,31 @@ public class NFeWebSocketHandler
         _logger = logger;
     }
 
-    public async Task HandleAsync(WebSocket webSocket, CancellationToken ct)
+    // `servicoParando` corta SO A ESPERA pela proxima mensagem.
+    //
+    // Por que existe: o electron-print deixa duas conexoes abertas o tempo todo,
+    // e este loop ficava parado no ReceiveAsync ouvindo apenas `ct`
+    // (RequestAborted), que so dispara quando o CLIENTE sai. Na parada do servico
+    // ninguem avisava o loop, e o Windows ficava "Parando..." os 30s inteiros do
+    // ShutdownTimeout ate o .NET derrubar as conexoes a forca.
+    //
+    // Por que NAO vai no processamento: a resposta de uma emissao volta por
+    // EnviarRespostaAsync(..., ct). Cancelar ali no meio de uma nota corta o envio
+    // da chave -- nota AUTORIZADA na SEFAZ e o AZFood sem saber, e a proxima
+    // emissao bate em duplicidade de numero. Por isso a mensagem ja recebida
+    // segue com o `ct` original ate o fim, e so depois o loop encerra.
+    public async Task HandleAsync(WebSocket webSocket, CancellationToken ct, CancellationToken servicoParando = default)
     {
         var buffer = new byte[1024 * 1024];
         var messageBuffer = new StringBuilder();
+        using var espera = CancellationTokenSource.CreateLinkedTokenSource(ct, servicoParando);
 
         try
         {
-            while (webSocket.State == WebSocketState.Open && !ct.IsCancellationRequested)
+            while (webSocket.State == WebSocketState.Open && !espera.IsCancellationRequested)
             {
                 var result = await webSocket.ReceiveAsync(
-                    new ArraySegment<byte>(buffer), ct);
+                    new ArraySegment<byte>(buffer), espera.Token);
 
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
@@ -132,6 +146,15 @@ public class NFeWebSocketHandler
             case "nfce":
                 _logger.LogInformation("JSON RECEBIDO: {Json}", json);
                 await ProcessarNfceAsync(webSocket, json, ct);
+                break;
+
+            case "cancelar":
+            case "cartacorrecao":
+            case "consultar":
+            case "inutilizar":
+            case "statusservico":
+                _logger.LogInformation("EVENTO RECEBIDO: {Json}", json);
+                await ProcessarEventoAsync(webSocket, json, ct);
                 break;
 
             default:
@@ -252,6 +275,116 @@ public class NFeWebSocketHandler
         await EnviarRespostaAsync(webSocket, resultado, ct);
     }
 
+    private async Task ProcessarEventoAsync(
+        WebSocket webSocket, string json, CancellationToken ct)
+    {
+        PedidoEventoFiscal? pedido;
+        try
+        {
+            pedido = JsonSerializer.Deserialize<PedidoEventoFiscal>(json, JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            pedido = null;
+            _logger.LogWarning(ex, "JSON de evento inválido");
+        }
+
+        var erros = ValidarEvento(pedido);
+        if (erros.Count > 0)
+        {
+            await EnviarJsonAsync(webSocket, new ResultadoEventoFiscal
+            {
+                Tipo = pedido?.Tipo ?? string.Empty,
+                Id = pedido?.Id ?? string.Empty,
+                Sucesso = false,
+                CodigoStatus = -1,
+                Motivo = erros.First().Mensagem,
+                Erros = erros
+            }, ct);
+            return;
+        }
+
+        var resultado = pedido!.Tipo.ToLowerInvariant() switch
+        {
+            "cancelar" => _nfeService.Cancelar(pedido),
+            "cartacorrecao" => _nfeService.CartaCorrecao(pedido),
+            "consultar" => _nfeService.Consultar(pedido),
+            "inutilizar" => _nfeService.Inutilizar(pedido),
+            _ => _nfeService.StatusServico(pedido),
+        };
+        await EnviarJsonAsync(webSocket, resultado, ct);
+    }
+
+    // Barra aqui o que a SEFAZ recusaria: cada recusa conta para o bloqueio de
+    // consumo indevido (656), e o texto que a SEFAZ devolve nao diz o que fazer.
+    // Normaliza o texto livre ANTES de medir -- quebra de linha e espaco duplo
+    // sao recusados pelo schema, e o operador digita os dois sem ver.
+    internal static List<ErroNFe> ValidarEvento(PedidoEventoFiscal? pedido)
+    {
+        var erros = new List<ErroNFe>();
+        if (pedido is null)
+        {
+            erros.Add(new ErroNFe { Codigo = -1, Mensagem = "Pedido de evento inválido" });
+            return erros;
+        }
+
+        static string UmaLinha(string? t) => string.Join(" ", (t ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        static string Digitos(string? t) => new((t ?? "").Where(char.IsDigit).ToArray());
+        pedido.Justificativa = UmaLinha(pedido.Justificativa);
+        pedido.Correcao = UmaLinha(pedido.Correcao);
+
+        var tipo = pedido.Tipo.ToLowerInvariant();
+        var chave = Digitos(pedido.Chave);
+
+        if (tipo is "cancelar" or "cartacorrecao" or "consultar" && chave.Length != 44)
+            erros.Add(new ErroNFe { Codigo = 30, Mensagem = "Chave de acesso deve ter 44 dígitos" });
+
+        if (tipo is "cancelar" or "inutilizar" && pedido.Justificativa.Length is < 15 or > 255)
+            erros.Add(new ErroNFe { Codigo = 31, Mensagem = "A justificativa deve ter entre 15 e 255 caracteres" });
+
+        // 15 ou 17 (schema TProt): a SEFAZ-SP devolve 17 na NFC-e (13526000014872171).
+        if (tipo == "cancelar" && Digitos(pedido.Protocolo).Length is not (15 or 17))
+            erros.Add(new ErroNFe { Codigo = 32, Mensagem = "Protocolo de autorização da nota deve ter 15 ou 17 dígitos" });
+
+        if (tipo == "cartacorrecao")
+        {
+            // A CC-e e so da NF-e. A NFC-e nao tem carta: o conserto dela e cancelar.
+            if (chave.Length == 44 && chave.Substring(20, 2) != "55")
+                erros.Add(new ErroNFe { Codigo = 33, Mensagem = "Carta de correção só existe para NF-e (modelo 55)" });
+            if (pedido.Correcao.Length is < 15 or > 1000)
+                erros.Add(new ErroNFe { Codigo = 34, Mensagem = "A correção deve ter entre 15 e 1000 caracteres" });
+            if (pedido.Sequencia is < 1 or > 20)
+                erros.Add(new ErroNFe { Codigo = 35, Mensagem = "Sequência da carta de correção deve ser de 1 a 20" });
+        }
+
+        if (tipo is "inutilizar" or "statusservico")
+        {
+            if (string.IsNullOrWhiteSpace(pedido.Uf))
+                erros.Add(new ErroNFe { Codigo = 36, Mensagem = "UF é obrigatória" });
+            if (pedido.Modelo is not (55 or 65))
+                erros.Add(new ErroNFe { Codigo = 37, Mensagem = "Modelo deve ser 55 ou 65" });
+        }
+
+        if (tipo == "inutilizar")
+        {
+            if (Digitos(pedido.Cnpj).Length != 14)
+                erros.Add(new ErroNFe { Codigo = 38, Mensagem = "CNPJ do emitente deve ter 14 dígitos" });
+            if (pedido.Serie is < 0 or > 999)
+                erros.Add(new ErroNFe { Codigo = 39, Mensagem = "Série deve ser de 0 a 999" });
+            if (pedido.NumeroInicial < 1 || pedido.NumeroFinal < pedido.NumeroInicial)
+                erros.Add(new ErroNFe { Codigo = 40, Mensagem = "Faixa de numeração inválida" });
+        }
+
+        return erros;
+    }
+
+    private static async Task EnviarJsonAsync(WebSocket webSocket, object resposta, CancellationToken ct)
+    {
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(resposta, resposta.GetType(), JsonOptions));
+        if (webSocket.State == WebSocketState.Open)
+            await webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct);
+    }
+
     private static List<ErroNFe> Validar(PedidoNFe? pedido)
     {
         var erros = new List<ErroNFe>();
@@ -305,6 +438,18 @@ public class NFeWebSocketHandler
                     {
                         erros.Add(new ErroNFe { Codigo = 17, Mensagem = "Para NFe, o endereço completo do destinatário (Logradouro, Municipio, CodigoMunicipio, UF) é obrigatório" });
                     }
+
+                    // Os dois abaixo a SEFAZ tambem recusa -- mas cada recusa conta
+                    // para o bloqueio de "consumo indevido" (Rejeicao 656), que no
+                    // GRAVETOS em 11/09/2026 travou a emissao por mais de uma hora
+                    // com o cliente esperando. Barrar aqui nao custa tentativa.
+                    if (pedido.Destinatario.IndicadorIE == 1 && string.IsNullOrWhiteSpace(pedido.Destinatario.InscricaoEstadual))
+                        erros.Add(new ErroNFe { Codigo = 18, Mensagem = "Destinatário marcado como contribuinte (indicadorIE 1) sem Inscrição Estadual" });
+
+                    // Na NF-e o nome e obrigatorio; na NFC-e nao. O mapper omite a tag
+                    // em branco para a NFC-e passar, e e aqui que a NF-e e barrada.
+                    if (string.IsNullOrWhiteSpace(pedido.Destinatario.Nome))
+                        erros.Add(new ErroNFe { Codigo = 19, Mensagem = "Para NFe, o nome do destinatário é obrigatório" });
                 }
             }
         }

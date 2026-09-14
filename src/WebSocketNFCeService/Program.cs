@@ -55,7 +55,9 @@ Func<HttpContext, Task> handleWebSocket = async context =>
         var handler = context.RequestServices
             .GetRequiredService<NFeWebSocketHandler>();
         var webSocket = await context.WebSockets.AcceptWebSocketAsync();
-        await handler.HandleAsync(webSocket, context.RequestAborted);
+        // A parada do servico entra SEPARADA do RequestAborted: ela corta so a
+        // espera por mensagem, nunca uma nota em processamento. Ver HandleAsync.
+        await handler.HandleAsync(webSocket, context.RequestAborted, app.Lifetime.ApplicationStopping);
     }
     else
     {
@@ -85,16 +87,29 @@ string[] recursosDoServico =
     "infAdic",
     "danfeA4",
     "ibscbs",     // Reforma Tributaria
+    "eventos",    // cancelar, cartaCorrecao, consultar, inutilizar, statusServico
 ];
 
-object HealthPayload(string wsPath) => new
+// A VALIDADE do certificado vai no health porque o painel ja pergunta por ele a
+// cada 30s: o aviso de vencimento sai de graca, sem chamada nova. So a data --
+// nada que identifique ou abra o certificado, porque este endereco e publico.
+object HealthPayload(string wsPath)
 {
-    status = "running",
-    service = "AZFoodWebSocketNFCe",
-    versao = versaoServico,
-    recursos = recursosDoServico,
-    wsEndpoint = $"ws://localhost:{wsConfig.Porta}{wsPath}"
-};
+    var validade = app.Services.GetRequiredService<INFeService>().ValidadeDoCertificado();
+    return new
+    {
+        status = "running",
+        service = "AZFoodWebSocketNFCe",
+        versao = versaoServico,
+        recursos = recursosDoServico,
+        wsEndpoint = $"ws://localhost:{wsConfig.Porta}{wsPath}",
+        certificado = validade is null ? null : new
+        {
+            validade = validade.Value.ToString("yyyy-MM-dd"),
+            diasRestantes = (int)Math.Floor((validade.Value - DateTime.Now).TotalDays),
+        },
+    };
+}
 
 app.MapGet("/health", () => Results.Ok(HealthPayload(wsConfig.Path)));
 app.MapGet("/health-nfe", () => Results.Ok(HealthPayload("/ws/nfe")));
