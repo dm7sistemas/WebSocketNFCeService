@@ -819,10 +819,16 @@ public static class PedidoToNFeMapper
 
     private static bool FormaPagamentoRequerCard(int tPag)
     {
-        // tPag que exigem card pela SEFAZ:
-        // 3=Cartão Crédito, 4=Cartão Débito, 5=Cartão da Loja
-        // 17=PIX Dinâmico, 18=TED, 19=Fidelidade, 20=PIX Estático
+        // tPag que levam o grupo card:
+        // 3=Cartão Crédito, 4=Cartão Débito,
+        // 17=PIX Dinâmico, 18=TED, 19=Fidelidade, 20=PIX Estático,
         // 21=Crédito em Loja, 22=PagEletrônico, 23=PIX Automático, 24=TEF
-        return tPag is 3 or 4 or 5 or >= 17 and <= 24;
+        //
+        // O 5 SAIU. E o fiado do AZFood (conta corrente / crediario da propria
+        // loja): nao passa por maquininha nem instituicao de pagamento, e a SEFAZ
+        // recusou a NF-e do periodo da conta corrente com o card junto --
+        // "Rejeicao: Tipo de pagamento nao aceita o grupo de cartoes ou boletos"
+        // (19/09/2026).
+        return tPag is 3 or 4 or >= 17 and <= 24;
     }
 }
