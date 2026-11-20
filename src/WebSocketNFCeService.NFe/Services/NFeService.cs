@@ -586,8 +586,9 @@ public class NFeService : INFeService
         var chave = SoDigitos(pedido.Chave);
         var cnpj = SoDigitos(pedido.Cnpj);
         var ultNsu = SoDigitos(pedido.UltNSU);
-        return Executar(SemChave(pedido), (servico, _, _) =>
+        return Executar(SemChave(pedido), (servico, config, _) =>
         {
+            SemConferirEsquema(config);
             var ret = servico.NfeDistDFeInteresse(
                 pedido.Uf ?? "", cnpj,
                 ultNSU: ultNsu.Length == 0 ? "0" : ultNsu,
@@ -621,6 +622,7 @@ public class NFeService : INFeService
         var cnpj = SoDigitos(pedido.Cnpj);
         return Executar(SemChave(pedido), (servico, config, _) =>
         {
+            SemConferirEsquema(config);
             var retorno = servico.RecepcaoEventoManifestacaoDestinatario(
                 IdLote(), 1, chave, NFeTipoEvento.TeMdCienciaDaOperacao, cnpj);
             var resultado = ResultadoDoEvento(retorno, chave, "ciencia", 1, config);
@@ -634,6 +636,14 @@ public class NFeService : INFeService
             return resultado;
         });
     }
+
+    // A biblioteca confere o pedido contra um arquivo de esquema (.xsd) antes de
+    // enviar, e a pasta Schemas instalada nas lojas so tem os da emissao. Na
+    // primeira consulta de verdade (ICE HOUSE, 20/11/2026) ela parou em "Could
+    // not find file ...SchemasdistDFeInt_v1.01.xsd". O pedido daqui e montado
+    // pela propria biblioteca e a SEFAZ o confere de qualquer forma: nestas duas
+    // operacoes a conferencia local nao acrescenta nada.
+    private static void SemConferirEsquema(ConfiguracaoServico config) => config.ValidarSchemas = false;
 
     // O Executar tira UF e modelo da chave quando ha chave. Nas notas RECEBIDAS a
     // chave e do fornecedor; o autor da consulta e a loja, e o modelo e sempre 55.
