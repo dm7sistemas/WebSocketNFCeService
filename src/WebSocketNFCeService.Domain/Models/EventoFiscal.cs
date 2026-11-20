@@ -55,6 +55,30 @@ public class PedidoEventoFiscal
 
     [JsonPropertyName("numeroFinal")]
     public int NumeroFinal { get; set; }
+
+    /// "assinadas": o mes das notas, como esta na chave (AAMM, ex.: "2610").
+    [JsonPropertyName("mes")]
+    public string? Mes { get; set; }
+
+    /// "guardar": o XML autorizado (procNFe) que o AZFood tem e este computador nao.
+    [JsonPropertyName("xml")]
+    public string? Xml { get; set; }
+
+    /// "guardar": o PDF (base64) desenhado pelo AZFood, com o MESMO codigo da
+    /// opcao DANFE das telas. Vindo, e ele que fica na pasta -- o PDF daqui e o
+    /// da tela tem de ser identicos, e so um desenhista garante isso.
+    [JsonPropertyName("pdf")]
+    public string? Pdf { get; set; }
+}
+
+/// Uma nota que este servico assinou e mandou (ou tentou mandar) para a SEFAZ.
+public class NotaAssinada
+{
+    [JsonPropertyName("chave")]
+    public string Chave { get; set; } = string.Empty;
+
+    [JsonPropertyName("pedidoId")]
+    public string PedidoId { get; set; } = string.Empty;
 }
 
 public class ResultadoEventoFiscal
@@ -101,6 +125,31 @@ public class ResultadoEventoFiscal
     /// Status do servico: tempo medio de resposta da SEFAZ, em segundos.
     [JsonPropertyName("tempoMedio")]
     public int? TempoMedio { get; set; }
+
+    /// "assinadas": toda nota do mes que saiu daqui. O AZFood compara com as que
+    /// ele conhece e consulta as que sobram -- a resposta delas se perdeu.
+    [JsonPropertyName("assinadas")]
+    public List<NotaAssinada>? Assinadas { get; set; }
+
+    /// "assinadas": chaves do mes que ja tem o XML autorizado / o PDF neste
+    /// computador. O AZFood compara com as notas dele e manda repor o que falta.
+    [JsonPropertyName("prontas")]
+    public List<string>? Prontas { get; set; }
+
+    [JsonPropertyName("pdfs")]
+    public List<string>? Pdfs { get; set; }
+
+    /// "assinadas": chaves com o arquivo assinado NA PASTA DO MES (a lista
+    /// `assinadas` olha todas as pastas, para a busca de notas perdidas).
+    [JsonPropertyName("assinadasNoMes")]
+    public List<string>? AssinadasNoMes { get; set; }
+
+    /// "guardar" e "consultar": o que foi gravado agora neste computador.
+    [JsonPropertyName("gravouXml")]
+    public bool GravouXml { get; set; }
+
+    [JsonPropertyName("gravouPdf")]
+    public bool GravouPdf { get; set; }
 
     [JsonPropertyName("erros")]
     public List<ErroNFe> Erros { get; set; } = new();

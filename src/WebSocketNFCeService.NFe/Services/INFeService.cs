@@ -9,6 +9,8 @@ public interface INFeService
     ResultadoEventoFiscal Cancelar(PedidoEventoFiscal pedido);
     ResultadoEventoFiscal CartaCorrecao(PedidoEventoFiscal pedido);
     ResultadoEventoFiscal Consultar(PedidoEventoFiscal pedido);
+    ResultadoEventoFiscal ListarAssinadas(PedidoEventoFiscal pedido);
+    ResultadoEventoFiscal GuardarArquivos(PedidoEventoFiscal pedido);
     ResultadoEventoFiscal Inutilizar(PedidoEventoFiscal pedido);
     ResultadoEventoFiscal StatusServico(PedidoEventoFiscal pedido);
 

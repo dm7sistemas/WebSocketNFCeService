@@ -153,6 +153,8 @@ public class NFeWebSocketHandler
             case "consultar":
             case "inutilizar":
             case "statusservico":
+            case "assinadas":
+            case "guardar":
                 _logger.LogInformation("EVENTO RECEBIDO: {Json}", json);
                 await ProcessarEventoAsync(webSocket, json, ct);
                 break;
@@ -310,6 +312,8 @@ public class NFeWebSocketHandler
             "cartacorrecao" => _nfeService.CartaCorrecao(pedido),
             "consultar" => _nfeService.Consultar(pedido),
             "inutilizar" => _nfeService.Inutilizar(pedido),
+            "assinadas" => _nfeService.ListarAssinadas(pedido),
+            "guardar" => _nfeService.GuardarArquivos(pedido),
             _ => _nfeService.StatusServico(pedido),
         };
         await EnviarJsonAsync(webSocket, resultado, ct);
@@ -336,7 +340,10 @@ public class NFeWebSocketHandler
         var tipo = pedido.Tipo.ToLowerInvariant();
         var chave = Digitos(pedido.Chave);
 
-        if (tipo is "cancelar" or "cartacorrecao" or "consultar" && chave.Length != 44)
+        if (tipo == "guardar" && string.IsNullOrWhiteSpace(pedido.Xml))
+            erros.Add(new ErroNFe { Codigo = 42, Mensagem = "O XML da nota é obrigatório" });
+
+        if (tipo is "cancelar" or "cartacorrecao" or "consultar" or "guardar" && chave.Length != 44)
             erros.Add(new ErroNFe { Codigo = 30, Mensagem = "Chave de acesso deve ter 44 dígitos" });
 
         if (tipo is "cancelar" or "inutilizar" && pedido.Justificativa.Length is < 15 or > 255)
@@ -355,6 +362,14 @@ public class NFeWebSocketHandler
                 erros.Add(new ErroNFe { Codigo = 34, Mensagem = "A correção deve ter entre 15 e 1000 caracteres" });
             if (pedido.Sequencia is < 1 or > 20)
                 erros.Add(new ErroNFe { Codigo = 35, Mensagem = "Sequência da carta de correção deve ser de 1 a 20" });
+        }
+
+        if (tipo == "assinadas")
+        {
+            if (Digitos(pedido.Mes).Length != 4)
+                erros.Add(new ErroNFe { Codigo = 41, Mensagem = "Mês deve vir como AAMM (ex.: 2610)" });
+            if (pedido.Modelo is not (55 or 65))
+                erros.Add(new ErroNFe { Codigo = 37, Mensagem = "Modelo deve ser 55 ou 65" });
         }
 
         if (tipo is "inutilizar" or "statusservico")

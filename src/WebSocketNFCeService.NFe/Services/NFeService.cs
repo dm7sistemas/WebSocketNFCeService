@@ -119,6 +119,10 @@ public class NFeService : INFeService
             // sabendo; a proxima tentativa cai em duplicidade, e e com este
             // arquivo que ela recupera a nota em vez de travar o numero.
             SalvarAssinada(nfe, chave, pedido.Id, configuracao.DiretorioSalvarXml);
+            // ... e uma copia vai para o AZFood, para a nota nao depender desta
+            // maquina (disco trocado, pasta apagada). Em paralelo: nao atrasa nem
+            // derruba a emissao.
+            EnviarAssinadaAoAzfood(nfe.ObterXmlString(), chave, pedido.Id);
 
             using var servicoNFe = new ServicosNFe(configuracao, certificado!);
             var retorno = servicoNFe.NFeAutorizacao(
@@ -453,7 +457,180 @@ public class NFeService : INFeService
         });
 
     public ResultadoEventoFiscal Consultar(PedidoEventoFiscal pedido) =>
-        Executar(pedido, (servico, _, chave) => ConsultarCom(servico, chave));
+        Executar(pedido, (servico, _, chave) => ConsultarCom(servico, chave, pedido.Xml));
+
+    // NOTAS QUE A SEFAZ PODE TER AUTORIZADO SEM O AZFOOD SABER (19/11/2026).
+    //
+    // ICE HOUSE, outubro: 67 numeros sem nota no AZFood. Quando o tunel devolve
+    // 502 a nota pode ter sido autorizada -- e a SEFAZ so consulta por CHAVE, que
+    // tem um pedaco sorteado (cNF). A chave so existe aqui, no nome do arquivo
+    // assinado. Isto NAO fala com a SEFAZ: lista as do mes, o AZFood tira as que
+    // conhece e consulta o resto uma a uma (a ponte corta em 30s).
+    public ResultadoEventoFiscal ListarAssinadas(PedidoEventoFiscal pedido)
+    {
+        var mes = SoDigitos(pedido.Mes);
+        var cnpj = SoDigitos(pedido.Cnpj);
+        var modelo = pedido.Modelo.ToString();
+        var raiz = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Xmls");
+        var notas = !Directory.Exists(raiz)
+            ? new List<NotaAssinada>()
+            : Directory.EnumerateFiles(raiz, "*-assinada-*.xml", SearchOption.AllDirectories)
+                .Select(a => Regex.Match(Path.GetFileName(a), @"^(\d{44})-assinada-(.+)\.xml$"))
+                .Where(m => m.Success)
+                .Select(m => new NotaAssinada { Chave = m.Groups[1].Value, PedidoId = m.Groups[2].Value })
+                .Where(n => n.Chave.Substring(2, 4) == mes && n.Chave.Substring(20, 2) == modelo
+                    && (cnpj.Length != 14 || CnpjDaChave(n.Chave) == cnpj))
+                .DistinctBy(n => n.Chave)
+                .OrderBy(n => n.Chave.Substring(25, 9))
+                .ToList();
+
+        // O que ja esta completo aqui, pelo nome do arquivo -- e SO NA PASTA DO
+        // MES. Em 19/11/2026 o CEO renomeou a pasta 202611 e a conferencia disse
+        // "o computador ja tem tudo": achava os arquivos na pasta renomeada. Copia
+        // em outra pasta e backup, nao e o arquivo no lugar.
+        List<string> ChavesCom(string pasta, string padrao)
+        {
+            var dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, pasta, "20" + mes);
+            return !Directory.Exists(dir)
+                ? new List<string>()
+                : Directory.EnumerateFiles(dir, padrao, SearchOption.TopDirectoryOnly)
+                    .Select(a => Path.GetFileName(a))
+                    .Where(n => n.Length > 44 && n.Take(44).All(char.IsDigit))
+                    .Select(n => n[..44])
+                    .Where(c => c.Substring(2, 4) == mes && c.Substring(20, 2) == modelo
+                        && (cnpj.Length != 14 || CnpjDaChave(c) == cnpj))
+                    .Distinct()
+                    .ToList();
+        }
+
+        _logger.LogInformation("assinadas {Mes} modelo {Modelo}: {Qtd} notas", mes, modelo, notas.Count);
+        return new ResultadoEventoFiscal
+        {
+            Tipo = pedido.Tipo,
+            Id = pedido.Id,
+            Sucesso = true,
+            Motivo = $"{notas.Count} nota(s) assinada(s) no mês",
+            Assinadas = notas,
+            Prontas = ChavesCom("Xmls", "*-nfe.xml"),
+            Pdfs = ChavesCom("Pdfs", "*-nfe.pdf"),
+            AssinadasNoMes = ChavesCom("Xmls", "*-assinada-*.xml"),
+        };
+    }
+
+    // O AZFOOD TEM A NOTA E ESTE COMPUTADOR NAO (20/11/2026, pedido do CEO):
+    // PC trocado, pasta apagada, ou nota recuperada pela consulta. O XML vem do
+    // AZFood; aqui ele so e gravado se for MESMO a nota daquela chave, e o caminho
+    // sai so da chave (44 digitos) -- nada do que chega decide onde escrever.
+    public ResultadoEventoFiscal GuardarArquivos(PedidoEventoFiscal pedido)
+    {
+        var chave = SoDigitos(pedido.Chave);
+        var resultado = new ResultadoEventoFiscal { Tipo = pedido.Tipo, Id = pedido.Id, Chave = chave };
+        var xml = pedido.Xml ?? "";
+        if (chave.Length != 44 || !xml.Contains("Id=\"NFe" + chave + "\""))
+        {
+            resultado.CodigoStatus = -1;
+            resultado.Motivo = "O XML enviado não é da nota desta chave.";
+            resultado.Erros.Add(new ErroNFe { Codigo = -1, Mensagem = resultado.Motivo });
+            return resultado;
+        }
+        byte[]? pdfDoAzfood = null;
+        if (!string.IsNullOrWhiteSpace(pedido.Pdf))
+        {
+            try { pdfDoAzfood = Convert.FromBase64String(pedido.Pdf); } catch { pdfDoAzfood = null; }
+            // So entra se for mesmo um PDF, e de tamanho de nota (ate 5 MB).
+            if (pdfDoAzfood == null || pdfDoAzfood.Length < 5 || pdfDoAzfood.Length > 5_000_000
+                || Encoding.ASCII.GetString(pdfDoAzfood, 0, 5) != "%PDF-")
+            {
+                resultado.CodigoStatus = -1;
+                resultado.Motivo = "O PDF enviado não é um PDF válido.";
+                resultado.Erros.Add(new ErroNFe { Codigo = -1, Mensagem = resultado.Motivo });
+                return resultado;
+            }
+        }
+        var (gravouXml, gravouPdf, erro) = GarantirArquivos(chave, xml, pedido.Id, pdfDoAzfood);
+        resultado.GravouXml = gravouXml;
+        resultado.GravouPdf = gravouPdf;
+        resultado.Sucesso = erro == null;
+        resultado.Motivo = erro ?? (gravouXml || gravouPdf ? "Arquivos gravados." : "Os arquivos já estavam no computador.");
+        if (erro != null) resultado.Erros.Add(new ErroNFe { Codigo = -1, Mensagem = erro });
+        return resultado;
+    }
+
+    // "Tem" = esta na pasta do mes da nota. A mesma regra da lista que o AZFood
+    // recebe (ChavesCom): se as duas discordassem, a conferencia pediria para
+    // sempre um arquivo que o "guardar" diz que ja existe.
+    private static bool TemNoMes(string raiz, string chave, string padrao)
+    {
+        var dir = PastaDoMes(raiz, chave);
+        return Directory.Exists(dir) && Directory.EnumerateFiles(dir, padrao, SearchOption.TopDirectoryOnly).Any();
+    }
+
+    private static string PastaDoMes(string raiz, string chave) =>
+        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, raiz, "20" + chave.Substring(2, 4));
+
+    // Deixa o XML autorizado e o PDF na pasta do MES DA NOTA, se faltarem. Nunca
+    // sobrescreve: o que ja esta aqui foi gravado na autorizacao.
+    //
+    // `idDoArquivo` (o "order-<pedido>" que o AZFood manda) repoe tambem o arquivo
+    // ASSINADO. E pelo nome dele que a busca de notas perdidas acha a nota e sabe
+    // de que pedido ela e: sem ele, pasta apagada = nota que a busca nunca mais ve
+    // (o CEO apagou a pasta de novembro em 19/11/2026 e a NF-e 8 sumiu da busca).
+    //
+    // `pdfDoAzfood`: o PDF desenhado pelo AZFood. Este SUBSTITUI o que estiver na
+    // pasta (o daqui e desenhado por outra biblioteca e nunca sai identico ao da
+    // tela). Sem ele, vale o desenho daqui, e so se faltar.
+    private (bool xml, bool pdf, string? erro) GarantirArquivos(
+        string chave, string procXml, string? idDoArquivo = null, byte[]? pdfDoAzfood = null)
+    {
+        var gravouXml = false;
+        var gravouPdf = false;
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(idDoArquivo) && !TemNoMes("Xmls", chave, $"{chave}-assinada-*.xml"))
+            {
+                XNamespace nsNfe = "http://www.portalfiscal.inf.br/nfe";
+                var docProc = XDocument.Parse(procXml);
+                var soNfe = docProc.Root!.Name.LocalName == "NFe" ? docProc.Root : docProc.Root.Element(nsNfe + "NFe");
+                if (soNfe != null)
+                {
+                    SalvarArquivo(PastaDoMes("Xmls", chave), $"{chave}-assinada-{NomeSeguro(idDoArquivo)}.xml",
+                        soNfe.ToString(SaveOptions.DisableFormatting));
+                    gravouXml = true;
+                }
+            }
+            if (!TemNoMes("Xmls", chave, $"{chave}-nfe.xml"))
+            {
+                SalvarXmlLocal(procXml, chave, PastaDoMes("Xmls", chave));
+                gravouXml = TemNoMes("Xmls", chave, $"{chave}-nfe.xml");
+            }
+            if (pdfDoAzfood != null)
+            {
+                var pastaPdf = PastaDoMes("Pdfs", chave);
+                Directory.CreateDirectory(pastaPdf);
+                File.WriteAllBytes(Path.Combine(pastaPdf, $"{chave}-nfe.pdf"), pdfDoAzfood);
+                gravouPdf = true;
+            }
+            else if (!TemNoMes("Pdfs", chave, $"{chave}-nfe.pdf"))
+            {
+                XNamespace ns = "http://www.portalfiscal.inf.br/nfe";
+                var doc = XDocument.Parse(procXml);
+                var elNfe = doc.Root!.Name.LocalName == "NFe" ? doc.Root : doc.Root.Element(ns + "NFe");
+                if (elNfe == null) return (gravouXml, false, "O XML não tem a nota (NFe) dentro.");
+                // O procNFe deste servico guarda o protocolo em ATRIBUTO; o padrao, em elemento.
+                var infProt = doc.Descendants(ns + "infProt").FirstOrDefault();
+                var nProt = infProt?.Attribute("nProt")?.Value ?? infProt?.Element(ns + "nProt")?.Value;
+                var nfe = new NFeNFe().CarregarDeXmlString(elNfe.ToString(SaveOptions.DisableFormatting));
+                _pdfService.Gerar(chave, nfe, nProt, PastaDoMes("Pdfs", chave));
+                gravouPdf = TemNoMes("Pdfs", chave, $"{chave}-nfe.pdf");
+            }
+            return (gravouXml, gravouPdf, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Falha ao guardar os arquivos da nota {Chave}", chave);
+            return (gravouXml, gravouPdf, $"Não foi possível gravar os arquivos: {ex.Message}");
+        }
+    }
 
     public ResultadoEventoFiscal Inutilizar(PedidoEventoFiscal pedido) =>
         Executar(pedido, (servico, config, _) =>
@@ -608,7 +785,9 @@ public class NFeService : INFeService
         return resultado;
     }
 
-    private ResultadoEventoFiscal ConsultarCom(ServicosNFe servico, string chave)
+    // `assinadaDoAzfood`: a nota assinada que o AZFood guardou. So entra quando
+    // esta maquina nao tem mais os arquivos, e so se for a nota daquela chave.
+    private ResultadoEventoFiscal ConsultarCom(ServicosNFe servico, string chave, string? assinadaDoAzfood = null)
     {
         var ret = servico.NfeConsultaProtocolo(chave).Retorno;
         var resultado = new ResultadoEventoFiscal
@@ -642,6 +821,20 @@ public class NFeService : INFeService
                 var nfe = new NFeNFe().CarregarDeXmlString(File.ReadAllText(assinada));
                 resultado.XmlAutorizado = GerarProcNFeXml(nfe, chave, ret.protNFe.infProt);
             }
+            else if (!string.IsNullOrWhiteSpace(assinadaDoAzfood) && assinadaDoAzfood.Contains("Id=\"NFe" + chave + "\""))
+            {
+                var nfe = new NFeNFe().CarregarDeXmlString(assinadaDoAzfood);
+                resultado.XmlAutorizado = GerarProcNFeXml(nfe, chave, ret.protNFe.infProt);
+            }
+
+            // Nota recuperada: a resposta da autorizacao se perdeu, entao o XML
+            // autorizado e o PDF nunca foram gravados aqui. Ficam agora.
+            if (resultado.XmlAutorizado != null)
+            {
+                var (gravouXml, gravouPdf, _) = GarantirArquivos(chave, resultado.XmlAutorizado);
+                resultado.GravouXml = gravouXml;
+                resultado.GravouPdf = gravouPdf;
+            }
         }
         return resultado;
     }
@@ -670,6 +863,62 @@ public class NFeService : INFeService
         }
     }
 
+    private const string UrlDoAzfood = "https://awwvyxzsqqwexobkjcat.supabase.co/functions/v1/programas-da-loja";
+
+    // A chave da loja e a mesma da ponte e do atualizador (token.txt do "Parear
+    // com AZFood"). Este servico roda como sistema e procura em todos os perfis.
+    private static string? LerTokenDaLoja()
+    {
+        try
+        {
+            var usuarios = Path.Combine(Path.GetPathRoot(Environment.SystemDirectory)!, "Users");
+            var arquivo = Directory.GetDirectories(usuarios)
+                .Select(d => new FileInfo(Path.Combine(d, @"AppData\Roaming\AZFood-Print\token.txt")))
+                .Where(f => f.Exists)
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .FirstOrDefault();
+            var token = arquivo == null ? null : File.ReadAllText(arquivo.FullName).Trim();
+            return string.IsNullOrEmpty(token) ? null : token;
+        }
+        catch { return null; }
+    }
+
+    private void EnviarAssinadaAoAzfood(string xmlAssinado, string chave, string pedidoId)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var token = LerTokenDaLoja();
+                if (token == null)
+                {
+                    _logger.LogInformation("Maquina nao pareada: nota assinada {Chave} fica so no disco", chave);
+                    return;
+                }
+                var corpo = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    action = "notaAssinada",
+                    chave,
+                    pedidoId,
+                    xml = xmlAssinado,
+                });
+                using var pedidoHttp = new HttpRequestMessage(HttpMethod.Post, UrlDoAzfood)
+                {
+                    Content = new StringContent(corpo, Encoding.UTF8, MediaTypeNames.Application.Json),
+                };
+                pedidoHttp.Headers.Add("x-azfood-token", token);
+                using var limite = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                using var resposta = await _httpClient.SendAsync(pedidoHttp, limite.Token);
+                if (!resposta.IsSuccessStatusCode)
+                    _logger.LogWarning("AZFood nao guardou a nota assinada {Chave}: HTTP {Status}", chave, (int)resposta.StatusCode);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Falha ao enviar a nota assinada {Chave} ao AZFood", chave);
+            }
+        });
+    }
+
     private void SalvarAssinada(NFeNFe nfe, string chave, string pedidoId, string? diretorio) =>
         SalvarArquivo(diretorio, $"{chave}-assinada-{NomeSeguro(pedidoId)}.xml", nfe.ObterXmlString());
 
@@ -687,9 +936,11 @@ public class NFeService : INFeService
         }
     }
 
-    private static string? ProcurarXml(string padrao)
+    private static string? ProcurarXml(string padrao) => ProcurarEm("Xmls", padrao);
+
+    private static string? ProcurarEm(string pasta, string padrao)
     {
-        var raiz = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Xmls");
+        var raiz = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, pasta);
         return Directory.Exists(raiz)
             ? Directory.EnumerateFiles(raiz, padrao, SearchOption.AllDirectories).FirstOrDefault()
             : null;

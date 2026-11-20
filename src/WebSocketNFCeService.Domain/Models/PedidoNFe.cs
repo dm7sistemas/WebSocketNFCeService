@@ -40,6 +40,12 @@ public class DadosNFe
     [JsonPropertyName("numero")]
     public int Numero { get; set; }
 
+    /// cNF (8 digitos) sorteado pelo AZFood. Com ele o servidor ja sabe a chave
+    /// da nota ANTES de enviar e a grava no pedido: resposta perdida deixa de
+    /// depender do arquivo desta maquina. Vazio = este servico sorteia.
+    [JsonPropertyName("codigoNumerico")]
+    public string? CodigoNumerico { get; set; }
+
     [JsonPropertyName("modelo")]
     public int Modelo { get; set; } = 65;
 

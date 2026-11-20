@@ -88,6 +88,11 @@ string[] recursosDoServico =
     "danfeA4",
     "ibscbs",     // Reforma Tributaria
     "eventos",    // cancelar, cartaCorrecao, consultar, inutilizar, statusServico
+    "assinadas",  // lista as notas assinadas do mes (recuperar resposta perdida)
+    "guardar",    // grava aqui o XML autorizado e o PDF de uma nota que o AZFood tem
+    "codigoNumerico", // usa o cNF que o AZFood manda (a chave fica conhecida antes do envio)
+    "assinadaNoAzfood", // manda a nota assinada ao AZFood antes do envio e a aceita de volta na consulta
+    "pdfDoAzfood", // grava na pasta o PDF que o AZFood desenha (identico ao da opcao DANFE)
 ];
 
 // A VALIDADE do certificado vai no health porque o painel ja pergunta por ele a

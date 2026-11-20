@@ -126,7 +126,7 @@ public static class PedidoToNFeMapper
         return new ide
         {
             cUF = estado,
-            cNF = new Random().Next(10000000, 99999999).ToString(),
+            cNF = CodigoNumerico(dadosNfe),
             natOp = dadosNfe.NaturezaOperacao,
             mod = dadosNfe.Modelo == 55 ? ModeloDocumento.NFe : ModeloDocumento.NFCe,
             serie = dadosNfe.Serie,
@@ -317,6 +317,16 @@ public static class PedidoToNFeMapper
                     })
                     .ToList()
         };
+    }
+
+    // O codigo do AZFood so vale se for exatamente 8 digitos e diferente do
+    // numero da nota (a SEFAZ recusa cNF = nNF); qualquer outra coisa, sorteia.
+    internal static string CodigoNumerico(DadosNFe dados)
+    {
+        var doAzfood = (dados.CodigoNumerico ?? "").Trim();
+        if (doAzfood.Length == 8 && doAzfood.All(char.IsDigit) && doAzfood[0] != '0' && int.Parse(doAzfood) != dados.Numero)
+            return doAzfood;
+        return new Random().Next(10000000, 99999999).ToString();
     }
 
     private static infAdic? MapearInformacoesAdicionais(InformacoesAdicionais? i)
