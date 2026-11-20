@@ -11,6 +11,8 @@ public interface INFeService
     ResultadoEventoFiscal Consultar(PedidoEventoFiscal pedido);
     ResultadoEventoFiscal ListarAssinadas(PedidoEventoFiscal pedido);
     ResultadoEventoFiscal GuardarArquivos(PedidoEventoFiscal pedido);
+    ResultadoEventoFiscal Distribuicao(PedidoEventoFiscal pedido);
+    ResultadoEventoFiscal Manifestar(PedidoEventoFiscal pedido);
     ResultadoEventoFiscal Inutilizar(PedidoEventoFiscal pedido);
     ResultadoEventoFiscal StatusServico(PedidoEventoFiscal pedido);
 

@@ -93,6 +93,7 @@ string[] recursosDoServico =
     "codigoNumerico", // usa o cNF que o AZFood manda (a chave fica conhecida antes do envio)
     "assinadaNoAzfood", // manda a nota assinada ao AZFood antes do envio e a aceita de volta na consulta
     "pdfDoAzfood", // grava na pasta o PDF que o AZFood desenha (identico ao da opcao DANFE)
+    "notasRecebidas", // distribuicao de DF-e (notas emitidas contra o CNPJ) e ciencia da operacao
 ];
 
 // A VALIDADE do certificado vai no health porque o painel ja pergunta por ele a

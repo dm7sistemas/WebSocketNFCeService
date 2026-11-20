@@ -155,6 +155,8 @@ public class NFeWebSocketHandler
             case "statusservico":
             case "assinadas":
             case "guardar":
+            case "distribuicao":
+            case "manifestar":
                 _logger.LogInformation("EVENTO RECEBIDO: {Json}", json);
                 await ProcessarEventoAsync(webSocket, json, ct);
                 break;
@@ -314,6 +316,8 @@ public class NFeWebSocketHandler
             "inutilizar" => _nfeService.Inutilizar(pedido),
             "assinadas" => _nfeService.ListarAssinadas(pedido),
             "guardar" => _nfeService.GuardarArquivos(pedido),
+            "distribuicao" => _nfeService.Distribuicao(pedido),
+            "manifestar" => _nfeService.Manifestar(pedido),
             _ => _nfeService.StatusServico(pedido),
         };
         await EnviarJsonAsync(webSocket, resultado, ct);
@@ -339,6 +343,19 @@ public class NFeWebSocketHandler
 
         var tipo = pedido.Tipo.ToLowerInvariant();
         var chave = Digitos(pedido.Chave);
+
+        if (tipo is "distribuicao" or "manifestar")
+        {
+            if (string.IsNullOrWhiteSpace(pedido.Uf))
+                erros.Add(new ErroNFe { Codigo = 36, Mensagem = "UF é obrigatória" });
+            if (Digitos(pedido.Cnpj).Length != 14)
+                erros.Add(new ErroNFe { Codigo = 38, Mensagem = "CNPJ da loja deve ter 14 dígitos" });
+            if (tipo == "manifestar" && chave.Length != 44)
+                erros.Add(new ErroNFe { Codigo = 30, Mensagem = "Chave de acesso deve ter 44 dígitos" });
+            // Consulta por chave: ou vem a chave inteira, ou nao vem chave.
+            if (tipo == "distribuicao" && chave.Length is not (0 or 44))
+                erros.Add(new ErroNFe { Codigo = 30, Mensagem = "Chave de acesso deve ter 44 dígitos" });
+        }
 
         if (tipo == "guardar" && string.IsNullOrWhiteSpace(pedido.Xml))
             erros.Add(new ErroNFe { Codigo = 42, Mensagem = "O XML da nota é obrigatório" });

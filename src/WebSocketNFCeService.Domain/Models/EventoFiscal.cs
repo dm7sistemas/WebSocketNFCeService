@@ -69,6 +69,25 @@ public class PedidoEventoFiscal
     /// da tela tem de ser identicos, e so um desenhista garante isso.
     [JsonPropertyName("pdf")]
     public string? Pdf { get; set; }
+
+    /// "distribuicao": o ultimo NSU que o AZFood ja recebeu (a SEFAZ devolve os
+    /// documentos seguintes). Vazio ou "0" = desde o comeco (ate 3 meses).
+    [JsonPropertyName("ultNSU")]
+    public string? UltNSU { get; set; }
+}
+
+/// Um documento que a SEFAZ distribuiu para o CNPJ da loja: o resumo de uma nota
+/// (resNFe), a nota completa (procNFe) ou um evento (resEvento, procEventoNFe).
+public class DocumentoDistribuido
+{
+    [JsonPropertyName("nsu")]
+    public string Nsu { get; set; } = string.Empty;
+
+    [JsonPropertyName("schema")]
+    public string Schema { get; set; } = string.Empty;
+
+    [JsonPropertyName("xml")]
+    public string Xml { get; set; } = string.Empty;
 }
 
 /// Uma nota que este servico assinou e mandou (ou tentou mandar) para a SEFAZ.
@@ -150,6 +169,17 @@ public class ResultadoEventoFiscal
 
     [JsonPropertyName("gravouPdf")]
     public bool GravouPdf { get; set; }
+
+    /// "distribuicao": ate onde a SEFAZ entregou e ate onde existe documento.
+    /// Iguais = nao ha mais nada, e a proxima consulta so depois de 1 hora.
+    [JsonPropertyName("ultNSU")]
+    public string? UltNSU { get; set; }
+
+    [JsonPropertyName("maxNSU")]
+    public string? MaxNSU { get; set; }
+
+    [JsonPropertyName("documentos")]
+    public List<DocumentoDistribuido>? Documentos { get; set; }
 
     [JsonPropertyName("erros")]
     public List<ErroNFe> Erros { get; set; } = new();

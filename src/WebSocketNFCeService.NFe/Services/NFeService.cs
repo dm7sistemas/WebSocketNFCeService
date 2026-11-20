@@ -252,6 +252,10 @@ public class NFeService : INFeService
             VersaoNfeConsultaProtocolo = VersaoServico.Versao400,
             VersaoNfeInutilizacao = VersaoServico.Versao400,
             VersaoNfeStatusServico = VersaoServico.Versao400,
+            // Notas recebidas (Ambiente Nacional): distribuicao de DF-e e a
+            // manifestacao do destinatario. As duas sao da versao 1.00.
+            VersaoNFeDistribuicaoDFe = VersaoServico.Versao100,
+            VersaoRecepcaoEventoManifestacaoDestinatario = VersaoServico.Versao100,
             ModeloDocumento = modelo == 55 ? ModeloDocumento.NFe : ModeloDocumento.NFCe,
             DiretorioSchemas = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Schemas"),
             DiretorioSalvarXml = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Xmls", DateTime.Now.ToString("yyyyMM")),
@@ -564,6 +568,84 @@ public class NFeService : INFeService
         var dir = PastaDoMes(raiz, chave);
         return Directory.Exists(dir) && Directory.EnumerateFiles(dir, padrao, SearchOption.TopDirectoryOnly).Any();
     }
+
+    // NOTAS RECEBIDAS (20/11/2026, pedido do CEO: "mostrar no estoque as notas
+    // emitidas diretamente da SEFAZ"). O Ambiente Nacional entrega ao destinatario
+    // tudo o que foi emitido contra o CNPJ dele, em ordem de NSU. So este servico
+    // pode perguntar, porque e aqui que esta o certificado.
+    //
+    // Sem chave: os documentos depois de `ultNSU` (ate 50 por vez). Com chave: a
+    // nota daquela chave (so vem completa depois da ciencia da operacao).
+    //
+    // A SEFAZ BLOQUEIA O CNPJ POR 1 HORA se a consulta se repetir sem haver nada
+    // novo (cStat 656). Quem decide QUANDO perguntar e o AZFood; aqui so se faz a
+    // pergunta. O UF e o da LOJA (cUFAutor), nunca o da chave -- a nota vem de
+    // fornecedor de qualquer estado -- por isso a chave nao passa pelo Executar.
+    public ResultadoEventoFiscal Distribuicao(PedidoEventoFiscal pedido)
+    {
+        var chave = SoDigitos(pedido.Chave);
+        var cnpj = SoDigitos(pedido.Cnpj);
+        var ultNsu = SoDigitos(pedido.UltNSU);
+        return Executar(SemChave(pedido), (servico, _, _) =>
+        {
+            var ret = servico.NfeDistDFeInteresse(
+                pedido.Uf ?? "", cnpj,
+                ultNSU: ultNsu.Length == 0 ? "0" : ultNsu,
+                chNFE: chave.Length == 44 ? chave : "").Retorno;
+            return new ResultadoEventoFiscal
+            {
+                CodigoStatus = ret.cStat,
+                Motivo = ret.xMotivo,
+                // 137 = nada novo; 138 = veio documento. O resto e recusa.
+                Sucesso = ret.cStat is 137 or 138,
+                UltNSU = ret.ultNSU.ToString(),
+                MaxNSU = ret.maxNSU.ToString(),
+                Documentos = (ret.loteDistDFeInt ?? Array.Empty<global::NFe.Classes.Servicos.DistribuicaoDFe.loteDistDFeInt>())
+                    .Select(d => new DocumentoDistribuido
+                    {
+                        Nsu = d.NSU.ToString(),
+                        Schema = d.schema ?? "",
+                        Xml = d.XmlNfe == null ? "" : Compressao.Unzip(d.XmlNfe),
+                    })
+                    .ToList(),
+            };
+        });
+    }
+
+    // CIENCIA DA OPERACAO (210210): o destinatario diz a SEFAZ que sabe da nota.
+    // E o que libera o XML completo. Nao confirma a compra nem obriga a nada
+    // alem de, depois, confirmar ou negar. 573 = a ciencia ja estava registrada.
+    public ResultadoEventoFiscal Manifestar(PedidoEventoFiscal pedido)
+    {
+        var chave = SoDigitos(pedido.Chave);
+        var cnpj = SoDigitos(pedido.Cnpj);
+        return Executar(SemChave(pedido), (servico, config, _) =>
+        {
+            var retorno = servico.RecepcaoEventoManifestacaoDestinatario(
+                IdLote(), 1, chave, NFeTipoEvento.TeMdCienciaDaOperacao, cnpj);
+            var resultado = ResultadoDoEvento(retorno, chave, "ciencia", 1, config);
+            if (!resultado.Sucesso && resultado.CodigoStatus == 573)
+            {
+                resultado.Sucesso = true;
+                resultado.Motivo = "A ciência desta nota já estava registrada na SEFAZ.";
+                resultado.Erros.Clear();
+            }
+            resultado.Chave = chave;
+            return resultado;
+        });
+    }
+
+    // O Executar tira UF e modelo da chave quando ha chave. Nas notas RECEBIDAS a
+    // chave e do fornecedor; o autor da consulta e a loja, e o modelo e sempre 55.
+    private static PedidoEventoFiscal SemChave(PedidoEventoFiscal p) => new()
+    {
+        Tipo = p.Tipo,
+        Id = p.Id,
+        Ambiente = p.Ambiente,
+        Uf = p.Uf,
+        Cnpj = p.Cnpj,
+        Modelo = 55,
+    };
 
     private static string PastaDoMes(string raiz, string chave) =>
         Path.Combine(AppDomain.CurrentDomain.BaseDirectory, raiz, "20" + chave.Substring(2, 4));
